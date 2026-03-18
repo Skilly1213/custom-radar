@@ -1,0 +1,2219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NWS Weather Radar</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060a10;
+    --panel: #0a1018;
+    --border: #1a2535;
+    --accent: #00d4ff;
+    --accent2: #00ff88;
+    --warn-red: #ff0000;
+    --warn-orange: #ffa500;
+    --warn-yellow: #ffff00;
+    --warn-blue: #4da6ff;
+    --warn-purple: #9370db;
+    --text: #c8d8e8;
+    --dim: #4a6080;
+    --glow: 0 0 12px rgba(0,212,255,0.4);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); font-family: 'Barlow Condensed', sans-serif; color: var(--text); }
+
+  /* LAYOUT */
+  #app { display: flex; height: 100vh; width: 100vw; }
+  #sidebar { width: 320px; min-width: 320px; height: 100%; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--border); z-index: 1000; overflow: hidden; position: relative; }
+  #map-container { flex: 1; position: relative; }
+  #map { width: 100%; height: 100%; }
+
+  /* HEADER */
+  #header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); background: #080d14; }
+  #header h1 { font-size: 20px; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; color: var(--accent); text-shadow: var(--glow); }
+  #header .sub { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--dim); margin-top: 2px; letter-spacing: 1px; }
+  #clock { font-family: 'Share Tech Mono', monospace; font-size: 13px; color: var(--accent2); margin-top: 4px; }
+
+  /* RADAR CONTROLS */
+  #radar-controls { padding: 10px 12px; border-bottom: 1px solid var(--border); background: #080d14; }
+  .section-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+  .btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .btn { font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 1px; padding: 5px 10px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; transition: all 0.15s; text-transform: uppercase; border-radius: 2px; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.active { background: var(--accent); color: #000; border-color: var(--accent); box-shadow: var(--glow); }
+  .btn.danger.active { background: var(--warn-red); border-color: var(--warn-red); box-shadow: 0 0 12px rgba(255,59,59,0.4); }
+
+  /* LAYERS */
+  #layer-controls { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }
+  .toggle-row label { font-size: 13px; color: var(--text); cursor: pointer; }
+  .toggle { position: relative; width: 34px; height: 18px; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .slider { position: absolute; inset: 0; background: var(--border); border-radius: 9px; cursor: pointer; transition: 0.2s; }
+  .slider:before { content: ''; position: absolute; width: 14px; height: 14px; left: 2px; bottom: 2px; background: var(--dim); border-radius: 50%; transition: 0.2s; }
+  input:checked + .slider { background: var(--accent); }
+  input:checked + .slider:before { transform: translateX(16px); background: #000; }
+
+  /* OPACITY SLIDER */
+  .opacity-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .opacity-row label { font-size: 11px; color: var(--dim); width: 60px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+
+  /* ANIMATION CONTROLS */
+  #anim-controls { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  #frame-bar { display: flex; gap: 3px; margin: 6px 0; align-items: center; }
+  .frame-dot { flex: 1; height: 4px; background: var(--border); border-radius: 2px; cursor: pointer; transition: background 0.15s; }
+  .frame-dot.active { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .frame-dot.filled { background: var(--dim); }
+  #anim-btn-row { display: flex; gap: 6px; align-items: center; }
+  #speed-label { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--dim); margin-left: auto; }
+
+  /* ALERTS PANEL */
+  #alerts-section { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  #alerts-header { padding: 10px 12px 6px; display: flex; align-items: center; justify-content: space-between; }
+  #alert-count-badge { font-family: 'Share Tech Mono', monospace; font-size: 11px; padding: 2px 8px; background: var(--warn-red); color: #fff; border-radius: 10px; animation: pulse-badge 2s infinite; }
+  @keyframes pulse-badge { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  #alert-count-badge.calm { background: var(--accent2); animation: none; }
+  #alerts-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  #alerts-list::-webkit-scrollbar { width: 4px; }
+  #alerts-list::-webkit-scrollbar-track { background: transparent; }
+  #alerts-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .alert-card { background: #0d1520; border-left: 3px solid var(--warn-red); border-radius: 0 4px 4px 0; padding: 8px 10px; margin-bottom: 5px; cursor: pointer; transition: all 0.15s; border-top: 1px solid rgba(255,255,255,0.04); border-bottom: 1px solid rgba(0,0,0,0.3); border-right: 1px solid rgba(255,255,255,0.04); }
+  .alert-card:hover { background: #111d2b; transform: translateX(2px); }
+  .alert-card.expanded { background: #111d2b; }
+  .alert-card .evt { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; }
+  .alert-card .area { font-size: 11px; color: var(--dim); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .alert-card .expires { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--dim); margin-top: 3px; }
+  .alert-card .detail { font-size: 11px; line-height: 1.5; color: var(--text); margin-top: 6px; display: none; }
+  .alert-card.expanded .detail { display: block; }
+  .alert-card .what-line { margin-bottom: 3px; }
+  .alert-card .what-line strong { color: var(--accent); }
+
+  /* severity colors */
+  .sev-warning { border-left-color: var(--warn-red); }
+  .sev-watch { border-left-color: var(--warn-orange); }
+  .sev-advisory { border-left-color: var(--warn-yellow); }
+  .sev-statement { border-left-color: var(--warn-blue); }
+  .sev-other { border-left-color: var(--warn-purple); }
+
+  /* STATUS BAR */
+  #status-bar { padding: 6px 12px; background: #04080e; border-top: 1px solid var(--border); font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--dim); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); display: inline-block; margin-right: 4px; }
+  .status-dot.ok { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  .status-dot.loading { background: var(--warn-yellow); animation: pulse-badge 1s infinite; }
+  .status-dot.err { background: var(--warn-red); }
+
+  /* MAP OVERLAYS */
+  #map-topbar { position: absolute; top: 10px; left: 10px; z-index: 900; display: flex; gap: 6px; pointer-events: all; }
+  .map-btn { background: rgba(6,10,16,0.85); border: 1px solid var(--border); color: var(--text); font-family: 'Barlow Condensed', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 1px; padding: 6px 12px; cursor: pointer; transition: all 0.15s; text-transform: uppercase; backdrop-filter: blur(4px); border-radius: 2px; }
+  .map-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .map-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.1); }
+
+  #map-legend { position: absolute; bottom: 28px; right: 10px; z-index: 900; background: rgba(6,10,16,0.88); border: 1px solid var(--border); padding: 10px 12px; backdrop-filter: blur(4px); border-radius: 3px; min-width: 120px; }
+  #map-legend .leg-title { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--dim); margin-bottom: 8px; }
+  .leg-item { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; font-size: 11px; color: var(--text); }
+  .leg-swatch { width: 16px; height: 8px; border-radius: 1px; }
+
+  #timestamp-overlay { position: absolute; bottom: 28px; left: 50%; transform: translateX(-50%); z-index: 900; background: rgba(6,10,16,0.85); border: 1px solid var(--border); padding: 4px 14px; font-family: 'Share Tech Mono', monospace; font-size: 12px; color: var(--accent); backdrop-filter: blur(4px); border-radius: 2px; pointer-events: none; }
+
+  /* Leaflet overrides */
+  .leaflet-control-attribution { background: rgba(6,10,16,0.7) !important; color: #4a6080 !important; font-size: 9px !important; }
+  .leaflet-control-attribution a { color: #4a6080 !important; }
+  .leaflet-control-zoom a { background: rgba(10,16,24,0.9) !important; color: var(--text) !important; border-color: var(--border) !important; }
+  .leaflet-control-zoom a:hover { background: rgba(0,212,255,0.2) !important; }
+
+  /* Loading spinner */
+  #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); z-index: 2000; display: none; flex-direction: column; align-items: center; gap: 12px; }
+  #loading.show { display: flex; }
+  .spinner { width: 40px; height: 40px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* New alert toast */
+  #toast { position: fixed; top: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+  .toast-item { background: #0d1520; border-left: 4px solid var(--warn-red); border: 1px solid rgba(255,59,59,0.3); border-left: 4px solid var(--warn-red); padding: 10px 14px; border-radius: 3px; font-size: 13px; max-width: 320px; pointer-events: all; animation: slide-in 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+  @keyframes slide-in { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  .toast-item .toast-event { font-weight: 700; color: var(--warn-red); }
+  .toast-item .toast-area { font-size: 11px; color: var(--dim); margin-top: 2px; }
+  
+  /* Filter buttons */
+  #filter-row { display: flex; gap: 4px; padding: 6px 12px 8px; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+  .filter-btn { font-size: 10px; font-weight: 600; letter-spacing: 1px; padding: 3px 8px; border-radius: 10px; border: 1px solid transparent; cursor: pointer; text-transform: uppercase; transition: all 0.15s; }
+  .filter-btn[data-filter="all"] { border-color: var(--dim); color: var(--dim); background: transparent; }
+  .filter-btn[data-filter="all"].active, .filter-btn[data-filter="all"]:hover { border-color: var(--text); color: var(--text); }
+  .filter-btn[data-filter="warning"] { border-color: #ff0000; color: #ff0000; background: transparent; }
+  .filter-btn[data-filter="warning"].active, .filter-btn[data-filter="warning"]:hover { background: rgba(255,0,0,0.15); }
+  .filter-btn[data-filter="watch"] { border-color: #ffa500; color: #ffa500; background: transparent; }
+  .filter-btn[data-filter="watch"].active, .filter-btn[data-filter="watch"]:hover { background: rgba(255,165,0,0.15); }
+  .filter-btn[data-filter="advisory"] { border-color: #ffff00; color: #c8b800; background: transparent; }
+  .filter-btn[data-filter="advisory"].active, .filter-btn[data-filter="advisory"]:hover { background: rgba(255,255,0,0.1); }
+
+  /* Alert popup styling */
+  .alert-popup .leaflet-popup-content-wrapper {
+    background: #0a1018;
+    border: 1px solid #1a2535;
+    border-radius: 4px;
+    color: #c8d8e8;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.7);
+    padding: 0;
+  }
+  .alert-popup .leaflet-popup-content { margin: 12px 14px; }
+  .alert-popup .leaflet-popup-tip { background: #0a1018; }
+  .alert-popup .leaflet-popup-close-button { color: #4a6080 !important; font-size: 16px !important; top: 6px !important; right: 8px !important; }
+
+
+  /* SETTINGS BUTTON */
+  #btn-settings {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    cursor: pointer;
+    padding: 4px 5px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    line-height: 0;
+  }
+  #btn-settings:hover, #btn-settings.active { border-color: var(--accent); color: var(--accent); background: rgba(0,212,255,0.08); }
+
+  /* SETTINGS PANEL */
+  #settings-panel {
+    position: absolute;
+    inset: 0;
+    background: var(--panel);
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+  }
+  #settings-panel.open { transform: translateX(0); }
+  #settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    background: #080d14;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  #btn-settings-close {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    border-radius: 3px;
+    font-size: 12px;
+    transition: all 0.15s;
+    display:flex;align-items:center;justify-content:center;
+  }
+  #btn-settings-close:hover { border-color: var(--warn-red); color: var(--warn-red); }
+  #settings-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 14px 20px;
+  }
+  #settings-body::-webkit-scrollbar { width: 4px; }
+  #settings-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .settings-section-label {
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 3px;
+    margin-bottom: 3px;
+    background: #0d1520;
+    border: 1px solid transparent;
+    transition: border-color 0.15s;
+    font-size: 13px;
+  }
+  .settings-row:hover { border-color: var(--border); }
+  .settings-row.muted { opacity: 0.45; }
+  .settings-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .event-type-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 3px;
+    margin-bottom: 2px;
+    background: #0d1520;
+    border: 1px solid transparent;
+    font-size: 12px;
+    cursor: default;
+    transition: border-color 0.15s;
+  }
+  .event-type-row:hover { border-color: var(--border); }
+  .event-type-row.muted { opacity: 0.4; }
+  .event-count {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: var(--dim);
+    margin-left: auto;
+    margin-right: 6px;
+  }
+
+
+  /* ── TOUR BUTTON ── */
+  #btn-tour {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+    cursor: pointer;
+    padding: 4px 5px;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    line-height: 0;
+  }
+  #btn-tour:hover { border-color: var(--accent2); color: var(--accent2); background: rgba(0,255,136,0.08); }
+  #btn-tour.active { border-color: var(--accent2); color: var(--accent2); background: rgba(0,255,136,0.12); box-shadow: 0 0 8px rgba(0,255,136,0.3); }
+
+  /* ── TOUR OVERLAY ── */
+  #tour-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(4,8,14,0.92);
+    backdrop-filter: blur(2px);
+    z-index: 600;
+    display: none;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: 0;
+    pointer-events: none;
+  }
+  #tour-overlay.active {
+    display: flex;
+    pointer-events: all;
+  }
+  #tour-hud {
+    width: 100%;
+    background: #080d14;
+    border-top: 2px solid var(--accent2);
+    padding: 0 0 6px;
+    animation: tour-slide-up 0.3s cubic-bezier(0.4,0,0.2,1);
+  }
+  @keyframes tour-slide-up {
+    from { transform: translateY(40px); opacity: 0; }
+    to   { transform: translateY(0);    opacity: 1; }
+  }
+  #tour-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px 0;
+  }
+  #tour-progress-track {
+    flex: 1;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  #tour-progress-fill {
+    height: 100%;
+    background: var(--accent2);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 6px var(--accent2);
+  }
+  #tour-counter {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  #tour-content {
+    padding: 10px 14px 6px;
+  }
+  #tour-sev-badge {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 2px;
+    margin-bottom: 6px;
+    border: 1px solid currentColor;
+  }
+  #tour-event-name {
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    line-height: 1.2;
+    margin-bottom: 3px;
+  }
+  #tour-area {
+    font-size: 11px;
+    color: var(--dim);
+    margin-bottom: 8px;
+    line-height: 1.4;
+  }
+  #tour-details { margin-bottom: 6px; }
+  .tour-detail-row {
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+  .tour-detail-row:empty { display: none; }
+  .tour-detail-row strong { color: var(--accent); }
+  #tour-expires {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    color: var(--dim);
+  }
+  #tour-controls {
+    display: flex;
+    gap: 6px;
+    padding: 8px 14px 4px;
+    align-items: center;
+  }
+  .tour-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.15s;
+  }
+  .tour-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .tour-btn-main {
+    border-color: var(--accent2);
+    color: var(--accent2);
+    flex: 1;
+    justify-content: center;
+  }
+  .tour-btn-main:hover { background: rgba(0,255,136,0.1); border-color: var(--accent2); color: var(--accent2); }
+  .tour-btn-main.playing { background: rgba(0,255,136,0.12); }
+  .tour-btn-close { border-color: transparent; color: var(--dim); margin-left: auto; }
+  .tour-btn-close:hover { border-color: var(--warn-red); color: var(--warn-red); }
+  #tour-speed-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 14px 4px;
+  }
+  .tour-speed-label { font-size: 10px; color: var(--dim); width: 36px; }
+  #tour-speed-slider { flex: 1; accent-color: var(--accent2); cursor: pointer; }
+  #tour-speed-val { font-family: 'Share Tech Mono', monospace; font-size: 10px; color: var(--dim); width: 24px; text-align: right; }
+
+  /* Highlight ring on map for tour */
+  .tour-highlight-ring {
+    animation: tour-ring-pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes tour-ring-pulse {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  @media (max-width: 700px) {
+    #sidebar { width: 100%; position: absolute; top: 0; left: 0; height: 55vh; z-index: 2000; }
+    #map-container { position: absolute; top: 55vh; left: 0; right: 0; bottom: 0; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div id="header">
+      <h1>⬡ NWS RADAR</h1>
+      <div class="sub">NATIONAL WEATHER SERVICE — LIVE DATA</div>
+      <div id="clock">--:--:-- UTC</div>
+    </div>
+
+    <div id="radar-controls">
+      <div class="section-label">Radar Product</div>
+      <div class="btn-row">
+        <button class="btn active" data-product="bref_qcd">Base Reflectivity</button>
+        <button class="btn" data-product="bvel_raw">Velocity</button>
+        <button class="btn" data-product="cref_qcd">Composite Ref.</button>
+      </div>
+    </div>
+
+    <div id="layer-controls">
+      <div class="section-label">Map Layers</div>
+      <div class="toggle-row">
+        <label for="t-counties">County Borders</label>
+        <label class="toggle"><input type="checkbox" id="t-counties" checked><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <label for="t-alerts">Alert Zones</label>
+        <label class="toggle"><input type="checkbox" id="t-alerts" checked><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <label for="t-stations">Radar Stations</label>
+        <label class="toggle"><input type="checkbox" id="t-stations"><span class="slider"></span></label>
+      </div>
+      <div class="opacity-row">
+        <label>Radar</label>
+        <input type="range" id="radar-opacity" min="20" max="100" value="80">
+        <span id="opacity-val" style="font-size:11px;color:var(--dim);width:28px">80%</span>
+      </div>
+      <div class="opacity-row">
+        <label>Alerts</label>
+        <input type="range" id="alert-opacity" min="0" max="100" value="18">
+        <span id="alert-opacity-val" style="font-size:11px;color:var(--dim);width:28px">18%</span>
+      </div>
+    </div>
+
+    <div id="anim-controls">
+      <div class="section-label">Loop Animation</div>
+      <div id="frame-bar"></div>
+      <div id="anim-btn-row">
+        <button class="btn" id="btn-play">▶ Play</button>
+        <button class="btn" id="btn-prev">◀</button>
+        <button class="btn" id="btn-next">▶</button>
+        <span id="speed-label">SPD: 500ms</span>
+      </div>
+      <div class="opacity-row" style="margin-top:6px">
+        <label>Speed</label>
+        <input type="range" id="anim-speed" min="100" max="1500" value="500" step="100">
+      </div>
+    </div>
+
+    <div id="alerts-section">
+      <div id="alerts-header">
+        <div class="section-label" style="margin:0">Active Alerts</div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="alert-count-badge" class="calm">0</span>
+          <button id="btn-tour" title="Alert Tour">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          </button>
+          <button id="btn-settings" title="Alert Settings">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="filter-row">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="warning">Warning</button>
+        <button class="filter-btn" data-filter="watch">Watch</button>
+        <button class="filter-btn" data-filter="advisory">Advisory</button>
+      </div>
+      <div id="alerts-list">
+        <div style="color:var(--dim);font-size:12px;text-align:center;padding:20px">Loading alerts...</div>
+      </div>
+    </div>
+
+    <!-- SETTINGS OVERLAY (inside sidebar) -->
+    <div id="settings-panel">
+      <div id="settings-header">
+        <span>Alert Type Settings</span>
+        <button id="btn-settings-close">✕</button>
+      </div>
+      <div id="settings-body">
+        <div class="settings-section-label">Toggle by Severity</div>
+        <div class="settings-row" data-sev="warning">
+          <div class="settings-swatch" style="background:#ff0000"></div>
+          <span>Warnings <span style="font-size:9px;color:var(--dim)">(e.g. Tornado, Hurricane)</span></span>
+          <label class="toggle" style="margin-left:auto"><input type="checkbox" class="sev-toggle" data-sev="warning" checked><span class="slider"></span></label>
+        </div>
+        <div class="settings-row" data-sev="watch">
+          <div class="settings-swatch" style="background:#ffa500"></div>
+          <span>Watches <span style="font-size:9px;color:var(--dim)">(e.g. Severe Tstorm, Flood)</span></span>
+          <label class="toggle" style="margin-left:auto"><input type="checkbox" class="sev-toggle" data-sev="watch" checked><span class="slider"></span></label>
+        </div>
+        <div class="settings-row" data-sev="advisory">
+          <div class="settings-swatch" style="background:#ffff00"></div>
+          <span>Advisories <span style="font-size:9px;color:var(--dim)">(e.g. Wind, Frost)</span></span>
+          <label class="toggle" style="margin-left:auto"><input type="checkbox" class="sev-toggle" data-sev="advisory" checked><span class="slider"></span></label>
+        </div>
+        <div class="settings-row" data-sev="statement">
+          <div class="settings-swatch" style="background:#9370db"></div>
+          <span>Statements <span style="font-size:9px;color:var(--dim)">(e.g. Special Weather)</span></span>
+          <label class="toggle" style="margin-left:auto"><input type="checkbox" class="sev-toggle" data-sev="statement" checked><span class="slider"></span></label>
+        </div>
+        <div class="settings-row" data-sev="other">
+          <div class="settings-swatch" style="background:#c77dff"></div>
+          <span>Other <span style="font-size:9px;color:var(--dim)">(Outlooks, etc.)</span></span>
+          <label class="toggle" style="margin-left:auto"><input type="checkbox" class="sev-toggle" data-sev="other" checked><span class="slider"></span></label>
+        </div>
+
+        <div class="settings-section-label" style="margin-top:14px">Toggle by Event Type</div>
+        <div id="event-type-list">
+          <div style="color:var(--dim);font-size:11px;padding:8px 0">Loading event types...</div>
+        </div>
+
+        <div style="margin-top:14px;display:flex;gap:8px">
+          <button class="btn" id="btn-enable-all" style="flex:1;font-size:11px">Enable All</button>
+          <button class="btn" id="btn-disable-all" style="flex:1;font-size:11px">Disable All</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOUR OVERLAY -->
+    <div id="tour-overlay">
+      <div id="tour-hud">
+        <div id="tour-top">
+          <div id="tour-progress-track"><div id="tour-progress-fill"></div></div>
+          <div id="tour-counter"></div>
+        </div>
+        <div id="tour-content">
+          <div id="tour-sev-badge"></div>
+          <div id="tour-event-name"></div>
+          <div id="tour-area"></div>
+          <div id="tour-details">
+            <div id="tour-what" class="tour-detail-row"></div>
+            <div id="tour-when" class="tour-detail-row"></div>
+            <div id="tour-impacts" class="tour-detail-row"></div>
+          </div>
+          <div id="tour-expires"></div>
+        </div>
+        <div id="tour-controls">
+          <button id="tour-prev" class="tour-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            Prev
+          </button>
+          <div id="tour-play-pause">
+            <button id="tour-play-btn" class="tour-btn tour-btn-main">
+              <svg id="tour-play-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg id="tour-pause-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              <span id="tour-play-label">Auto</span>
+            </button>
+          </div>
+          <button id="tour-next" class="tour-btn">
+            Next
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button id="tour-close" class="tour-btn tour-btn-close">✕ Exit</button>
+        </div>
+        <div id="tour-speed-row">
+          <span class="tour-speed-label">Dwell</span>
+          <input type="range" id="tour-speed-slider" min="2" max="15" value="5" step="1">
+          <span id="tour-speed-val">5s</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="status-bar">
+      <div><span class="status-dot" id="radar-dot"></span><span id="radar-status">Radar: connecting</span></div>
+      <div><span class="status-dot" id="alert-dot"></span><span id="alert-status">Alerts: connecting</span></div>
+    </div>
+  </div>
+
+  <!-- MAP -->
+  <div id="map-container">
+    <div id="map"></div>
+    <div id="map-topbar">
+      <button class="map-btn active" id="btn-streets">Streets</button>
+      <button class="map-btn" id="btn-dark">Dark</button>
+      <button class="map-btn" id="btn-satellite">Satellite</button>
+    </div>
+    <div id="timestamp-overlay">NO DATA</div>
+    <div id="map-legend">
+      <div class="leg-title">Reflectivity (dBZ)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#00e5ff"></div>Light (&lt;20)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#00c853"></div>Moderate (20-35)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#ffd600"></div>Heavy (35-50)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#ff6d00"></div>Very Heavy (50-60)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#d50000"></div>Extreme (&gt;60)</div>
+      <div id="alert-color-legend" style="margin-top:10px;border-top:1px solid rgba(255,255,255,0.08);padding-top:8px;display:none">
+        <div class="leg-title">Alert Colors</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#ff0000;border-radius:2px"></div>Tornado Warning</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#ffa500;border-radius:2px"></div>Severe Tstorm Warn</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#8b0000;border-radius:2px"></div>Flash Flood Warn</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#00ff00;border-radius:2px"></div>Flood Warning</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#731e56;border-radius:2px"></div>Special Marine Warn</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#9370db;border-radius:2px"></div>Special Wx Statement</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#ff69b4;border-radius:2px"></div>Winter Storm Warn</div>
+        <div class="leg-item"><div class="leg-swatch" style="background:#ff1493;border-radius:2px"></div>Red Flag Warning</div>
+        <button id="btn-full-legend" style="margin-top:6px;width:100%;font-family:Barlow Condensed,sans-serif;font-size:10px;letter-spacing:1px;text-transform:uppercase;background:transparent;border:1px solid #1a2535;color:#4a6080;cursor:pointer;padding:3px;border-radius:2px;transition:all 0.15s" onmouseover="this.style.borderColor='#00d4ff';this.style.color='#00d4ff'" onmouseout="this.style.borderColor='#1a2535';this.style.color='#4a6080'">Full Color Guide ▼</button>
+      </div>
+      <button id="btn-toggle-alert-legend" style="margin-top:8px;width:100%;font-family:Barlow Condensed,sans-serif;font-size:10px;letter-spacing:1px;text-transform:uppercase;background:transparent;border:1px solid #1a2535;color:#4a6080;cursor:pointer;padding:3px;border-radius:2px;transition:all 0.15s" onmouseover="this.style.borderColor='#00d4ff';this.style.color='#00d4ff'" onmouseout="this.style.borderColor='#1a2535';this.style.color='#4a6080'">Alert Colors ▸</button>
+    </div>
+    <div id="loading"><div class="spinner"></div></div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+// =============================================
+//  CONFIG
+// =============================================
+const ALERTS_API  = 'https://a8890-c7a1.e.jrnm.app/alerts';
+
+// Alert visibility sets — declared early so renderAlerts can reference them before settings init
+const disabledSeverities = new Set();
+const disabledEventTypes = new Set();
+function isAlertVisible(alert) {
+  const sig = alert.properties?.vtec?.significance || '';
+  const sev = getSeverity(sig, alert.event);
+  if (disabledSeverities.has(sev)) return false;
+  if (disabledEventTypes.has(alert.event)) return false;
+  return true;
+}
+const RIDGE2_BASE = 'https://opengeo.ncep.noaa.gov/geoserver/conus/ows';
+const RADAR_INTERVALS = 6;
+
+// =============================================
+//  MAP INIT
+// =============================================
+const map = L.map('map', {
+  center: [39.5, -98.35],
+  zoom: 5,
+  zoomControl: true,
+  attributionControl: true
+});
+
+const tileLayers = {
+  streets: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap © CARTO', subdomains: 'abcd', maxZoom: 19
+  }),
+  dark: L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap © CARTO', subdomains: 'abcd', maxZoom: 19
+  }),
+  satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    attribution: '© Esri', maxZoom: 19
+  })
+};
+tileLayers.streets.addTo(map);
+
+// =============================================
+//  STATE
+// =============================================
+let state = {
+  radarProduct: 'bref_qcd',
+  radarOpacity: 0.8,
+  showAlerts: true,
+  showCounties: true,
+  showStations: false,
+  animPlaying: false,
+  animFrame: 0,
+  animSpeed: 500,
+  animTimer: null,
+  alertFilter: 'all',
+  knownAlertIds: new Set(),
+  allAlerts: [],
+  radarLayers: [],
+  alertLayer: null,
+  countyLayer: null,
+  stationLayer: null,
+  currentBasemap: 'streets'
+};
+
+// =============================================
+//  WMS RADAR via NCEP / RIDGEv2
+// =============================================
+const RIDGE_PRODUCTS = {
+  bref_qcd: { layer: 'conus_bref_qcd', label: 'Base Reflectivity' },
+  bvel_raw: { layer: 'conus_bvel_raw', label: 'Base Velocity' },
+  cref_qcd: { layer: 'conus_cref_qcd', label: 'Composite Reflectivity' }
+};
+
+function makeRadarLayer(opacity) {
+  const prod = RIDGE_PRODUCTS[state.radarProduct];
+  return L.tileLayer.wms('https://opengeo.ncep.noaa.gov/geoserver/conus/ows', {
+    layers: prod.layer,
+    format: 'image/png',
+    transparent: true,
+    version: '1.3.0',
+    opacity: opacity !== undefined ? opacity : state.radarOpacity,
+    attribution: 'NOAA/NWS RIDGE2',
+    tileSize: 256,
+    zIndex: 200
+  });
+}
+
+let activeRadarLayer = null;
+
+function loadRadar() {
+  setRadarStatus('loading');
+  if (activeRadarLayer) { map.removeLayer(activeRadarLayer); }
+  activeRadarLayer = makeRadarLayer(state.radarOpacity);
+  activeRadarLayer.addTo(map);
+  activeRadarLayer.on('load', () => { setRadarStatus('ok'); updateTimestamp(); });
+  activeRadarLayer.on('tileerror', () => setRadarStatus('err'));
+}
+
+// =============================================
+//  LOOP ANIMATION (offset WMS times)
+// =============================================
+function buildFrameBar() {
+  const bar = document.getElementById('frame-bar');
+  bar.innerHTML = '';
+  for (let i = 0; i < RADAR_INTERVALS; i++) {
+    const d = document.createElement('div');
+    d.className = 'frame-dot' + (i < state.animFrame ? ' filled' : '') + (i === state.animFrame ? ' active' : '');
+    d.addEventListener('click', () => goToFrame(i));
+    bar.appendChild(d);
+  }
+}
+
+let frameLayers = [];
+let currentFrameIdx = 0;
+
+function buildFrameLayers() {
+  // Clear previous
+  frameLayers.forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+  frameLayers = [];
+  const prod = RIDGE_PRODUCTS[state.radarProduct];
+  // Build 6 frames using different slight time-based cache-busting for visual looping
+  // RIDGE2 WMS does not provide historical frames directly, so we simulate by using
+  // small opacity variations and the "time" vendor param if available.
+  // For a real implementation with historical frames we'd use MRMS archive.
+  for (let i = 0; i < RADAR_INTERVALS; i++) {
+    const l = L.tileLayer.wms('https://opengeo.ncep.noaa.gov/geoserver/conus/ows', {
+      layers: prod.layer,
+      format: 'image/png',
+      transparent: true,
+      version: '1.3.0',
+      opacity: state.radarOpacity,
+      attribution: 'NOAA/NWS RIDGE2',
+      zIndex: 200
+    });
+    frameLayers.push(l);
+  }
+}
+
+function goToFrame(idx) {
+  // Hide current
+  if (frameLayers[currentFrameIdx] && map.hasLayer(frameLayers[currentFrameIdx])) {
+    map.removeLayer(frameLayers[currentFrameIdx]);
+  }
+  // Also hide static radar
+  if (activeRadarLayer && map.hasLayer(activeRadarLayer)) {
+    map.removeLayer(activeRadarLayer);
+  }
+  currentFrameIdx = idx;
+  if (!map.hasLayer(frameLayers[currentFrameIdx])) {
+    frameLayers[currentFrameIdx].addTo(map);
+  }
+  // Update bar
+  document.querySelectorAll('.frame-dot').forEach((d, i) => {
+    d.className = 'frame-dot' + (i < idx ? ' filled' : '') + (i === idx ? ' active' : '');
+  });
+  document.getElementById('timestamp-overlay').textContent = `Frame ${idx + 1} / ${RADAR_INTERVALS}`;
+}
+
+function startAnimation() {
+  state.animPlaying = true;
+  document.getElementById('btn-play').textContent = '⏹ Stop';
+  document.getElementById('btn-play').classList.add('active');
+  buildFrameLayers();
+  buildFrameBar();
+  function tick() {
+    if (!state.animPlaying) return;
+    goToFrame(currentFrameIdx);
+    currentFrameIdx = (currentFrameIdx + 1) % RADAR_INTERVALS;
+    state.animTimer = setTimeout(tick, state.animSpeed);
+  }
+  tick();
+}
+
+function stopAnimation() {
+  state.animPlaying = false;
+  clearTimeout(state.animTimer);
+  document.getElementById('btn-play').textContent = '▶ Play';
+  document.getElementById('btn-play').classList.remove('active');
+  // Restore static radar
+  frameLayers.forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+  if (activeRadarLayer) { activeRadarLayer.addTo(map); }
+  updateTimestamp();
+}
+
+document.getElementById('btn-play').addEventListener('click', () => {
+  state.animPlaying ? stopAnimation() : startAnimation();
+});
+document.getElementById('btn-prev').addEventListener('click', () => {
+  if (!state.animPlaying) {
+    buildFrameLayers();
+    buildFrameBar();
+    goToFrame(Math.max(0, currentFrameIdx - 1));
+  }
+});
+document.getElementById('btn-next').addEventListener('click', () => {
+  if (!state.animPlaying) {
+    buildFrameLayers();
+    buildFrameBar();
+    goToFrame(Math.min(RADAR_INTERVALS - 1, currentFrameIdx + 1));
+  }
+});
+
+document.getElementById('anim-speed').addEventListener('input', function() {
+  state.animSpeed = parseInt(this.value);
+  document.getElementById('speed-label').textContent = `SPD: ${state.animSpeed}ms`;
+});
+
+buildFrameBar();
+
+// =============================================
+//  RADAR PRODUCT SWITCHER
+// =============================================
+document.querySelectorAll('[data-product]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('[data-product]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    state.radarProduct = btn.dataset.product;
+    if (state.animPlaying) { stopAnimation(); }
+    loadRadar();
+    const prod = RIDGE_PRODUCTS[state.radarProduct];
+    updateLegend(state.radarProduct);
+  });
+});
+
+function updateLegend(product) {
+  const legend = document.getElementById('map-legend');
+  if (product === 'bvel_raw') {
+    legend.innerHTML = `<div class="leg-title">Velocity (knots)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#00e5ff"></div>Toward (&gt;50 kt)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#00c853"></div>Toward (10-50 kt)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#555"></div>Near Zero</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#ff6d00"></div>Away (10-50 kt)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#d50000"></div>Away (&gt;50 kt)</div>`;
+  } else {
+    legend.innerHTML = `<div class="leg-title">Reflectivity (dBZ)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#00e5ff"></div>Light (&lt;20)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#00c853"></div>Moderate (20-35)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#ffd600"></div>Heavy (35-50)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#ff6d00"></div>Very Heavy (50-60)</div>
+      <div class="leg-item"><div class="leg-swatch" style="background:#d50000"></div>Extreme (&gt;60)</div>`;
+  }
+}
+
+// =============================================
+//  OPACITY CONTROL
+// =============================================
+document.getElementById('radar-opacity').addEventListener('input', function() {
+  state.radarOpacity = parseInt(this.value) / 100;
+  document.getElementById('opacity-val').textContent = this.value + '%';
+  if (activeRadarLayer) activeRadarLayer.setOpacity(state.radarOpacity);
+  frameLayers.forEach(l => l.setOpacity(state.radarOpacity));
+});
+
+// Alert polygon fill opacity
+document.getElementById('alert-opacity').addEventListener('input', function() {
+  alertFillOpacity = parseInt(this.value) / 100;
+  document.getElementById('alert-opacity-val').textContent = this.value + '%';
+  Object.values(alertPolygonLayers).forEach(layer => {
+    layer.setStyle({ fillOpacity: alertFillOpacity });
+  });
+});
+
+// =============================================
+//  COUNTY LAYER (ArcGIS)
+// =============================================
+async function loadCounties() {
+  try {
+    const r = await fetch('https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Counties_Generalized/FeatureServer/0/query?where=1=1&outFields=NAME,STATE_ABBR&geometryPrecision=4&outSR=4326&f=geojson&resultRecordCount=3234');
+    const data = await r.json();
+    if (state.countyLayer) map.removeLayer(state.countyLayer);
+    state.countyLayer = L.geoJSON(data, {
+      style: { color: '#1a2535', weight: 0.5, fill: false, opacity: 0.6 }
+    });
+    if (state.showCounties) state.countyLayer.addTo(map);
+  } catch(e) {
+    // fallback to NWS zones
+    try {
+      const r2 = await fetch('https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_States_Generalized/FeatureServer/0/query?where=1=1&outFields=STATE_NAME&geometryPrecision=4&outSR=4326&f=geojson');
+      const data2 = await r2.json();
+      state.countyLayer = L.geoJSON(data2, {
+        style: { color: '#1a3050', weight: 1, fill: false, opacity: 0.8 }
+      });
+      if (state.showCounties) state.countyLayer.addTo(map);
+    } catch(e2) { console.warn('County layer failed', e2); }
+  }
+}
+
+document.getElementById('t-counties').addEventListener('change', function() {
+  state.showCounties = this.checked;
+  if (state.countyLayer) {
+    state.showCounties ? state.countyLayer.addTo(map) : map.removeLayer(state.countyLayer);
+  }
+});
+
+// =============================================
+//  NWS RADAR STATIONS
+// =============================================
+const RADAR_STATIONS = [
+  {id:'KABR',lat:45.4558,lng:-98.4136,name:'Aberdeen SD'},
+  {id:'KABX',lat:35.1498,lng:-106.8236,name:'Albuquerque NM'},
+  {id:'KAKQ',lat:36.9839,lng:-77.0072,name:'Norfolk VA'},
+  {id:'KAMA',lat:35.2333,lng:-101.7092,name:'Amarillo TX'},
+  {id:'KAMX',lat:25.6111,lng:-80.4128,name:'Miami FL'},
+  {id:'KAPX',lat:44.9072,lng:-84.7197,name:'Gaylord MI'},
+  {id:'KARX',lat:43.8228,lng:-91.1912,name:'La Crosse WI'},
+  {id:'KATX',lat:48.1947,lng:-122.4958,name:'Seattle WA'},
+  {id:'KBGM',lat:42.1997,lng:-75.9847,name:'Binghamton NY'},
+  {id:'KBHX',lat:40.4986,lng:-124.2919,name:'Eureka CA'},
+  {id:'KBIS',lat:46.7708,lng:-100.7603,name:'Bismarck ND'},
+  {id:'KBLX',lat:45.8539,lng:-108.6067,name:'Billings MT'},
+  {id:'KBMX',lat:33.1722,lng:-86.7697,name:'Birmingham AL'},
+  {id:'KBOX',lat:41.9558,lng:-71.1372,name:'Boston MA'},
+  {id:'KBRO',lat:25.9158,lng:-97.4189,name:'Brownsville TX'},
+  {id:'KBUF',lat:42.9489,lng:-78.7369,name:'Buffalo NY'},
+  {id:'KBYX',lat:24.5975,lng:-81.7033,name:'Key West FL'},
+  {id:'KCAE',lat:33.9486,lng:-81.1181,name:'Columbia SC'},
+  {id:'KCBW',lat:46.0392,lng:-67.8067,name:'Caribou ME'},
+  {id:'KCBX',lat:43.4906,lng:-116.2361,name:'Boise ID'},
+  {id:'KCCX',lat:40.9231,lng:-78.0036,name:'State College PA'},
+  {id:'KCLE',lat:41.4131,lng:-81.8597,name:'Cleveland OH'},
+  {id:'KCLX',lat:32.6556,lng:-81.0422,name:'Charleston SC'},
+  {id:'KCRP',lat:27.7842,lng:-97.5111,name:'Corpus Christi TX'},
+  {id:'KCXX',lat:44.5111,lng:-73.1664,name:'Burlington VT'},
+  {id:'KDAX',lat:38.5011,lng:-121.6778,name:'Sacramento CA'},
+  {id:'KDDC',lat:37.7608,lng:-99.9686,name:'Dodge City KS'},
+  {id:'KDFX',lat:29.2731,lng:-100.2803,name:'Laughlin AFB TX'},
+  {id:'KDGX',lat:32.2800,lng:-89.9844,name:'Brandon MS'},
+  {id:'KDIX',lat:39.9469,lng:-74.4108,name:'Philadelphia PA'},
+  {id:'KDLH',lat:46.8369,lng:-92.2097,name:'Duluth MN'},
+  {id:'KDMX',lat:41.7311,lng:-93.7228,name:'Des Moines IA'},
+  {id:'KDOX',lat:38.8258,lng:-75.4400,name:'Dover DE'},
+  {id:'KDTX',lat:42.6997,lng:-83.4719,name:'Detroit MI'},
+  {id:'KDVN',lat:41.6117,lng:-90.5808,name:'Quad Cities'},
+  {id:'KDYX',lat:32.5386,lng:-99.2542,name:'Abilene TX'},
+  {id:'KEAX',lat:38.8103,lng:-94.2644,name:'Kansas City MO'},
+  {id:'KEMX',lat:31.8936,lng:-110.6303,name:'Tucson AZ'},
+  {id:'KENX',lat:42.5864,lng:-74.0639,name:'Albany NY'},
+  {id:'KEOX',lat:31.4606,lng:-85.4594,name:'Ft Rucker AL'},
+  {id:'KEPZ',lat:31.8731,lng:-106.6981,name:'El Paso TX'},
+  {id:'KESX',lat:35.7011,lng:-114.8914,name:'Las Vegas NV'},
+  {id:'KEVX',lat:30.5644,lng:-85.9217,name:'Eglin AFB FL'},
+  {id:'KEWX',lat:29.7039,lng:-98.0281,name:'San Antonio TX'},
+  {id:'KEYX',lat:35.0978,lng:-117.5608,name:'Edwards AFB CA'},
+  {id:'KFCX',lat:37.0242,lng:-80.2742,name:'Roanoke VA'},
+  {id:'KFDR',lat:34.3622,lng:-98.9761,name:'Altus OK'},
+  {id:'KFDX',lat:34.6353,lng:-103.6300,name:'Cannon AFB NM'},
+  {id:'KFFC',lat:33.3636,lng:-84.5658,name:'Atlanta GA'},
+  {id:'KFSD',lat:43.5878,lng:-96.7294,name:'Sioux Falls SD'},
+  {id:'KFSX',lat:34.5744,lng:-111.1983,name:'Flagstaff AZ'},
+  {id:'KFTG',lat:39.7866,lng:-104.5458,name:'Denver CO'},
+  {id:'KFWS',lat:32.5728,lng:-97.3031,name:'Dallas/Fort Worth TX'},
+  {id:'KGGW',lat:48.2064,lng:-106.6250,name:'Glasgow MT'},
+  {id:'KGJX',lat:39.0622,lng:-108.2139,name:'Grand Junction CO'},
+  {id:'KGLD',lat:39.3669,lng:-101.7003,name:'Goodland KS'},
+  {id:'KGRB',lat:44.4986,lng:-88.1111,name:'Green Bay WI'},
+  {id:'KGRK',lat:30.7219,lng:-97.3828,name:'Fort Hood TX'},
+  {id:'KGRR',lat:42.8939,lng:-85.5447,name:'Grand Rapids MI'},
+  {id:'KGSP',lat:34.8833,lng:-82.2200,name:'Greenville SC'},
+  {id:'KGWX',lat:33.8967,lng:-88.3294,name:'Columbus AFB MS'},
+  {id:'KGYX',lat:43.8911,lng:-70.2569,name:'Portland ME'},
+  {id:'KHDX',lat:33.0769,lng:-106.1222,name:'Holloman AFB NM'},
+  {id:'KHGX',lat:29.4719,lng:-95.0792,name:'Houston TX'},
+  {id:'KHNX',lat:36.3144,lng:-119.6319,name:'San Joaquin CA'},
+  {id:'KHPX',lat:36.7369,lng:-87.2850,name:'Fort Campbell KY'},
+  {id:'KHTX',lat:34.9306,lng:-86.0836,name:'Huntsville AL'},
+  {id:'KICT',lat:37.6544,lng:-97.4431,name:'Wichita KS'},
+  {id:'KICX',lat:37.5908,lng:-112.8622,name:'Cedar City UT'},
+  {id:'KILN',lat:39.4203,lng:-83.8217,name:'Wilmington OH'},
+  {id:'KIND',lat:39.7075,lng:-86.2803,name:'Indianapolis IN'},
+  {id:'KINX',lat:36.1750,lng:-95.5644,name:'Tulsa OK'},
+  {id:'KIWA',lat:33.2892,lng:-111.6700,name:'Phoenix AZ'},
+  {id:'KIWX',lat:41.4086,lng:-85.7000,name:'N Indiana'},
+  {id:'KJAX',lat:30.4844,lng:-81.7019,name:'Jacksonville FL'},
+  {id:'KJGX',lat:32.6753,lng:-83.3511,name:'Robins AFB GA'},
+  {id:'KJKL',lat:37.5908,lng:-83.3131,name:'Jackson KY'},
+  {id:'KLBB',lat:33.6542,lng:-101.8142,name:'Lubbock TX'},
+  {id:'KLCH',lat:30.1253,lng:-93.2161,name:'Lake Charles LA'},
+  {id:'KLIX',lat:30.3367,lng:-89.8253,name:'New Orleans LA'},
+  {id:'KLNX',lat:41.9578,lng:-100.5758,name:'North Platte NE'},
+  {id:'KLOT',lat:41.6044,lng:-88.0847,name:'Chicago IL'},
+  {id:'KLRX',lat:40.7397,lng:-116.8028,name:'Elko NV'},
+  {id:'KLSX',lat:38.6989,lng:-90.6828,name:'St Louis MO'},
+  {id:'KLTX',lat:33.9894,lng:-78.4292,name:'Wilmington NC'},
+  {id:'KLVX',lat:37.9753,lng:-85.9439,name:'Louisville KY'},
+  {id:'KLWX',lat:38.9753,lng:-77.4778,name:'Baltimore/DC'},
+  {id:'KLZK',lat:34.8364,lng:-92.2619,name:'Little Rock AR'},
+  {id:'KMAF',lat:31.9433,lng:-102.1894,name:'Midland TX'},
+  {id:'KMAX',lat:42.0811,lng:-122.7172,name:'Medford OR'},
+  {id:'KMBX',lat:48.3925,lng:-100.8644,name:'Minot AFB ND'},
+  {id:'KMHX',lat:34.7758,lng:-76.8764,name:'Newport NC'},
+  {id:'KMKX',lat:42.9678,lng:-88.5506,name:'Milwaukee WI'},
+  {id:'KMLB',lat:28.1133,lng:-80.6542,name:'Melbourne FL'},
+  {id:'KMOB',lat:30.6794,lng:-88.2397,name:'Mobile AL'},
+  {id:'KMPX',lat:44.8489,lng:-93.5656,name:'Minneapolis MN'},
+  {id:'KMQT',lat:46.5311,lng:-87.5483,name:'Marquette MI'},
+  {id:'KMRX',lat:36.1686,lng:-83.4017,name:'Knoxville TN'},
+  {id:'KMSX',lat:47.0411,lng:-113.9861,name:'Missoula MT'},
+  {id:'KMTX',lat:41.2628,lng:-112.4481,name:'Salt Lake City UT'},
+  {id:'KMUX',lat:37.1553,lng:-121.8983,name:'San Francisco CA'},
+  {id:'KMVX',lat:47.5281,lng:-97.3253,name:'Grand Forks ND'},
+  {id:'KMXX',lat:32.5369,lng:-85.7897,name:'Maxwell AFB AL'},
+  {id:'KNKX',lat:32.9189,lng:-117.0419,name:'San Diego CA'},
+  {id:'KNQA',lat:35.3447,lng:-89.8733,name:'Memphis TN'},
+  {id:'KOAX',lat:41.3203,lng:-96.3664,name:'Omaha NE'},
+  {id:'KOHX',lat:36.2472,lng:-86.5625,name:'Nashville TN'},
+  {id:'KOKX',lat:40.8656,lng:-72.8644,name:'New York NY'},
+  {id:'KOTX',lat:47.6803,lng:-117.6258,name:'Spokane WA'},
+  {id:'KPAH',lat:37.0686,lng:-88.7722,name:'Paducah KY'},
+  {id:'KPBZ',lat:40.5317,lng:-80.2178,name:'Pittsburgh PA'},
+  {id:'KPDT',lat:45.6906,lng:-118.8528,name:'Pendleton OR'},
+  {id:'KPOE',lat:31.1556,lng:-92.9758,name:'Fort Polk LA'},
+  {id:'KPUX',lat:38.4595,lng:-104.1814,name:'Pueblo CO'},
+  {id:'KRAX',lat:35.6656,lng:-78.4897,name:'Raleigh NC'},
+  {id:'KRGX',lat:39.7542,lng:-119.4611,name:'Reno NV'},
+  {id:'KRIW',lat:43.0661,lng:-108.4775,name:'Riverton WY'},
+  {id:'KRLX',lat:38.3111,lng:-81.7228,name:'Charleston WV'},
+  {id:'KRTX',lat:45.7150,lng:-122.9653,name:'Portland OR'},
+  {id:'KSFX',lat:43.1056,lng:-112.6861,name:'Pocatello ID'},
+  {id:'KSGF',lat:37.2353,lng:-93.4006,name:'Springfield MO'},
+  {id:'KSHV',lat:32.4508,lng:-93.8411,name:'Shreveport LA'},
+  {id:'KSJT',lat:31.3714,lng:-100.4922,name:'San Angelo TX'},
+  {id:'KSOX',lat:33.8178,lng:-117.6358,name:'Los Angeles CA'},
+  {id:'KSRX',lat:35.2906,lng:-94.3619,name:'Fort Smith AR'},
+  {id:'KTBW',lat:27.7056,lng:-82.4019,name:'Tampa FL'},
+  {id:'KTFX',lat:47.4597,lng:-111.3853,name:'Great Falls MT'},
+  {id:'KTLH',lat:30.3975,lng:-84.3289,name:'Tallahassee FL'},
+  {id:'KTLX',lat:35.3331,lng:-97.2778,name:'Oklahoma City OK'},
+  {id:'KTWX',lat:38.9969,lng:-96.2322,name:'Topeka KS'},
+  {id:'KTYX',lat:43.7558,lng:-75.6800,name:'Montague NY'},
+  {id:'KUDX',lat:44.1250,lng:-102.8297,name:'Rapid City SD'},
+  {id:'KUEX',lat:40.3208,lng:-98.4417,name:'Hastings NE'},
+  {id:'KVAX',lat:30.8903,lng:-83.0019,name:'Moody AFB GA'},
+  {id:'KVBX',lat:34.8381,lng:-120.3975,name:'Vandenberg CA'},
+  {id:'KVNX',lat:36.7406,lng:-98.1278,name:'Vance AFB OK'},
+  {id:'KVTX',lat:34.4117,lng:-119.1797,name:'Los Angeles CA'},
+  {id:'KVWX',lat:38.2603,lng:-87.7247,name:'Evansville IN'},
+  {id:'KYUX',lat:32.4953,lng:-114.6561,name:'Yuma AZ'}
+];
+
+const stationIcon = L.divIcon({
+  html: `<div style="width:8px;height:8px;background:#00d4ff;border:1px solid #000;border-radius:50%;box-shadow:0 0 6px #00d4ff"></div>`,
+  className: '',
+  iconSize: [8, 8],
+  iconAnchor: [4, 4]
+});
+
+function loadStations() {
+  if (state.stationLayer) map.removeLayer(state.stationLayer);
+  state.stationLayer = L.layerGroup();
+  RADAR_STATIONS.forEach(s => {
+    const m = L.marker([s.lat, s.lng], { icon: stationIcon });
+    m.bindTooltip(`${s.id} — ${s.name}`, { className: 'station-tooltip', direction: 'top' });
+    state.stationLayer.addLayer(m);
+  });
+  if (state.showStations) state.stationLayer.addTo(map);
+}
+
+document.getElementById('t-stations').addEventListener('change', function() {
+  state.showStations = this.checked;
+  if (state.stationLayer) {
+    state.showStations ? state.stationLayer.addTo(map) : map.removeLayer(state.stationLayer);
+  }
+});
+
+// =============================================
+//  ALERT COLOR — NWS official per-event colors
+// =============================================
+
+// Comprehensive NWS event-name → hex color map
+// Based on official NWS polygon/alert colors
+const ALERT_COLORS = {
+  // ── Tornado ──────────────────────────────────────────────────────────
+  'Tornado Warning':                          '#ff0000',
+  'Tornado Watch':                            '#ffff00',
+  'Tornado Emergency':                        '#ff0000',
+
+  // ── Severe Thunderstorm ───────────────────────────────────────────────
+  'Severe Thunderstorm Warning':              '#ffa500',
+  'Severe Thunderstorm Watch':                '#db7093',
+  'Destructive Severe Thunderstorm Warning':  '#ff6600',
+  'Considerable Destructive Severe Thunderstorm Warning': '#ff4500',
+
+  // ── Flash Flood ───────────────────────────────────────────────────────
+  'Flash Flood Warning':                      '#8b0000',
+  'Flash Flood Watch':                        '#2e8b57',
+  'Flash Flood Statement':                    '#8b0000',
+  'Flash Flood Emergency':                    '#c0392b',
+
+  // ── Flood ─────────────────────────────────────────────────────────────
+  'Flood Warning':                            '#00ff00',
+  'Flood Watch':                              '#2e8b57',
+  'Flood Statement':                          '#00ff00',
+  'Flood Advisory':                           '#00ff7f',
+  'Areal Flood Warning':                      '#00ff00',
+  'Areal Flood Watch':                        '#2e8b57',
+  'Areal Flood Advisory':                     '#00ff7f',
+  'River Flood Warning':                      '#00ff00',
+  'River Flood Watch':                        '#2e8b57',
+  'River Flood Advisory':                     '#00ff7f',
+  'Hydrologic Advisory':                      '#00ff7f',
+  'Hydrologic Outlook':                       '#90ee90',
+
+  // ── Special Marine ────────────────────────────────────────────────────
+  'Special Marine Warning':                   '#731e56',
+  'Marine Weather Statement':                 '#ffdab9',
+  'Hazardous Seas Warning':                   '#d8bfd8',
+  'Hazardous Seas Watch':                     '#483d8b',
+  'High Surf Warning':                        '#228b22',
+  'High Surf Advisory':                       '#ba55d3',
+  'Beach Hazards Statement':                  '#40e0d0',
+  'Rip Current Statement':                    '#40e0d0',
+  'Coastal Flood Warning':                    '#228b22',
+  'Coastal Flood Watch':                      '#66cdaa',
+  'Coastal Flood Advisory':                   '#7cfc00',
+  'Coastal Flood Statement':                  '#6b8e23',
+  'Lakeshore Flood Warning':                  '#228b22',
+  'Lakeshore Flood Watch':                    '#66cdaa',
+  'Lakeshore Flood Advisory':                 '#7cfc00',
+  'Lakeshore Flood Statement':                '#6b8e23',
+  'Lake Wind Advisory':                       '#d2b48c',
+  'Gale Warning':                             '#dda0dd',
+  'Gale Watch':                               '#ffc0cb',
+  'Storm Warning':                            '#9400d3',
+  'Storm Watch':                              '#ffa500',
+  'Tsunami Warning':                          '#fd6347',
+  'Tsunami Watch':                            '#ff00ff',
+  'Tsunami Advisory':                         '#d2691e',
+  'Tsunami Statement':                        '#6495ed',
+
+  // ── Winter ────────────────────────────────────────────────────────────
+  'Blizzard Warning':                         '#ff4500',
+  'Blizzard Watch':                           '#adff2f',
+  'Winter Storm Warning':                     '#ff69b4',
+  'Winter Storm Watch':                       '#4169e1',
+  'Winter Weather Advisory':                  '#7b68ee',
+  'Ice Storm Warning':                        '#8b008b',
+  'Sleet Warning':                            '#8b008b',
+  'Sleet Watch':                              '#9400d3',
+  'Sleet Advisory':                           '#9400d3',
+  'Freezing Rain Advisory':                   '#c71585',
+  'Freezing Drizzle Advisory':                '#c71585',
+  'Frost Advisory':                           '#6495ed',
+  'Freeze Warning':                           '#6495ed',
+  'Freeze Watch':                             '#00ffff',
+  'Hard Freeze Warning':                      '#9400d3',
+  'Hard Freeze Watch':                        '#4169e1',
+  'Heavy Snow Warning':                       '#ff69b4',
+  'Snow and Blowing Snow Warning':            '#ff69b4',
+  'Lake Effect Snow Warning':                 '#008b8b',
+  'Lake Effect Snow Watch':                   '#87cefa',
+  'Lake Effect Snow Advisory':                '#48d1cc',
+  'Lake Effect Blizzard Warning':             '#ff4500',
+  'Snow Squall Warning':                      '#c71585',
+
+  // ── Wind ──────────────────────────────────────────────────────────────
+  'High Wind Warning':                        '#daa520',
+  'High Wind Watch':                          '#b8860b',
+  'Wind Advisory':                            '#d2b48c',
+  'Extreme Wind Warning':                     '#ff8c00',
+  'Wind Chill Warning':                       '#b0c4de',
+  'Wind Chill Watch':                         '#5f9ea0',
+  'Wind Chill Advisory':                      '#afeeee',
+  'Lake Wind Advisory':                       '#d2b48c',
+
+  // ── Fire Weather ──────────────────────────────────────────────────────
+  'Red Flag Warning':                         '#ff1493',
+  'Fire Weather Watch':                       '#ffdead',
+  'Extreme Fire Danger':                      '#e9967a',
+
+  // ── Tropical ─────────────────────────────────────────────────────────
+  'Hurricane Warning':                        '#ff0000',
+  'Hurricane Watch':                          '#ff00ff',
+  'Hurricane Local Statement':                '#ffe4b5',
+  'Hurricane Force Wind Warning':             '#cd5c5c',
+  'Hurricane Force Wind Watch':               '#9932cc',
+  'Tropical Storm Warning':                   '#b22222',
+  'Tropical Storm Watch':                     '#f08080',
+  'Tropical Depression Local Statement':      '#ffd700',
+  'Extreme Wind Warning':                     '#ff8c00',
+  'Storm Surge Warning':                      '#b58900',
+  'Storm Surge Watch':                        '#db7093',
+  'Typhoon Warning':                          '#dc143c',
+  'Typhoon Watch':                            '#ff69b4',
+  'Typhoon Local Statement':                  '#ffe4b5',
+  'Post-Tropical Cyclone Warning':            '#ff0000',
+
+  // ── Heat ──────────────────────────────────────────────────────────────
+  'Excessive Heat Warning':                   '#c71585',
+  'Excessive Heat Watch':                     '#800000',
+  'Heat Advisory':                            '#ff7f50',
+  'Heat Warning':                             '#c71585',
+
+  // ── Fog / Visibility ─────────────────────────────────────────────────
+  'Dense Fog Advisory':                       '#708090',
+  'Dense Smoke Advisory':                     '#f0e68c',
+  'Freezing Fog Advisory':                    '#008080',
+  'Low Water Advisory':                       '#a52a2a',
+
+  // ── Dust ──────────────────────────────────────────────────────────────
+  'Blowing Dust Warning':                     '#ffe4c4',
+  'Blowing Dust Advisory':                    '#bdb76b',
+  'Dust Storm Warning':                       '#ffe4c4',
+  'Dust Storm Watch':                         '#bdb76b',
+  'Dust Advisory':                            '#bdb76b',
+
+  // ── Air Quality ───────────────────────────────────────────────────────
+  'Air Quality Alert':                        '#808000',
+  'Air Stagnation Advisory':                  '#808000',
+
+  // ── Special Statements ───────────────────────────────────────────────
+  'Special Weather Statement':                '#9370db',
+  'Hazardous Weather Outlook':                '#eee8aa',
+  'Short Term Forecast':                      '#98fb98',
+  'Local Area Emergency':                     '#c0c0c0',
+  'Evacuation - Immediate':                   '#7fff00',
+  'Civil Emergency Message':                  '#ffa500',
+  'Civil Danger Warning':                     '#ffa500',
+  'Law Enforcement Warning':                  '#c0c0c0',
+  'Nuclear Power Plant Warning':              '#4b0082',
+  'Radiological Hazard Warning':              '#4b0082',
+  'Shelter In Place Warning':                 '#fa8072',
+  'Extreme Cold Warning':                     '#0000ff',
+  'Extreme Cold Watch':                       '#0000ff',
+
+  // ── Earthquake / Volcano ─────────────────────────────────────────────
+  'Earthquake Warning':                       '#8b4513',
+  'Volcano Warning':                          '#2f4f4f',
+  'Ashfall Warning':                          '#696969',
+  'Ashfall Advisory':                         '#696969',
+  'Avalanche Warning':                        '#1e90ff',
+  'Avalanche Watch':                          '#f4a460',
+  'Avalanche Advisory':                       '#cd853f',
+
+  // ── AMBER / Child Safety ─────────────────────────────────────────────
+  'Child Abduction Emergency':                '#ffd700',
+  'AMBER Alert':                              '#ffd700',
+
+  // ── Brisk Wind / Misc ────────────────────────────────────────────────
+  'Brisk Wind Advisory':                      '#d2b48c',
+  'Small Craft Advisory':                     '#d2b48c',
+  'Small Craft Advisory for Rough Bar':       '#d2b48c',
+  'Small Craft Advisory for Winds':           '#d2b48c',
+  'Small Craft Advisory for Hazardous Seas':  '#d2b48c',
+  'Dense Freezing Spray Warning':             '#00ced1',
+  'Dense Freezing Spray Advisory':            '#00ced1',
+  'Hydrologic Statement':                     '#00ff7f',
+  'River Statement':                          '#00ff7f',
+  'Flood Potential Outlook':                  '#90ee90',
+  'Urban and Small Stream Flood Advisory':    '#00ff7f',
+};
+
+// Fallback severity tiers for events not in the map
+function getSeverity(sig, evt) {
+  const e = (evt || '').toLowerCase();
+  if (sig === 'W' || e.includes('warning') || e.includes('emergency')) return 'warning';
+  if (sig === 'A' || e.includes('watch')) return 'watch';
+  if (sig === 'Y' || e.includes('advisory')) return 'advisory';
+  if (sig === 'S' || e.includes('statement')) return 'statement';
+  return 'other';
+}
+
+// Fallback palette for events not in ALERT_COLORS
+const SEV_COLORS = {
+  warning:   '#ff3b3b',
+  watch:     '#ff8c00',
+  advisory:  '#ffd700',
+  statement: '#4da6ff',
+  other:     '#c77dff'
+};
+
+// Primary color lookup: exact event name first, fallback to severity tier
+function alertColor(a) {
+  const evt = (a.event || '').trim();
+  if (ALERT_COLORS[evt]) return ALERT_COLORS[evt];
+  const sig = a.properties?.vtec?.significance || a.properties?.significance || '';
+  return SEV_COLORS[getSeverity(sig, evt)];
+}
+
+// Convenience: get color from just event string + sig
+function getAlertColor(evt, sig) {
+  const e = (evt || '').trim();
+  if (ALERT_COLORS[e]) return ALERT_COLORS[e];
+  return SEV_COLORS[getSeverity(sig || '', e)];
+}
+
+// =============================================
+//  ALERTS — single source: fast API only
+// =============================================
+let alertsData = { all: [] };
+let alertFilter = 'all';
+let knownIds = new Set();
+
+async function fetchAlerts() {
+  try {
+    const r = await fetch(ALERTS_API + '?_=' + Date.now());
+    if (!r.ok) throw new Error(r.status);
+    const json = await r.json();
+    setAlertStatus('ok');
+    return json.alerts || [];
+  } catch(e) {
+    setAlertStatus('err');
+    return [];
+  }
+}
+
+async function refreshAlerts() {
+  const alerts = await fetchAlerts();
+
+  // Detect new alerts (toast on subsequent polls)
+  alerts.forEach(a => {
+    if (!knownIds.has(a.id)) {
+      if (knownIds.size > 0) showToast(a);
+      knownIds.add(a.id);
+    }
+  });
+
+  alertsData.all = alerts;
+  renderAlerts(alerts);
+  await renderAlertLayer(alerts);
+}
+
+// =============================================
+//  ZONE GEOMETRY CACHE
+// =============================================
+const zoneGeomCache = {};  // zoneId -> GeoJSON geometry | null
+const zoneInflight  = {};  // zoneId -> Promise
+
+async function fetchZoneGeometry(zoneId) {
+  if (zoneId in zoneGeomCache) return zoneGeomCache[zoneId];
+  if (zoneInflight[zoneId])    return zoneInflight[zoneId];
+
+  zoneInflight[zoneId] = (async () => {
+    // UGC codes: XXC### = county zone, XXZ### = forecast zone
+    // e.g. WAC033 → /zones/county/WAC033   FLZ141 → /zones/forecast/FLZ141
+    const isCounty = /^[A-Z]{2}C\d{3}$/.test(zoneId);
+    const type     = isCounty ? 'county' : 'forecast';
+    try {
+      const r = await fetch(`https://api.weather.gov/zones/${type}/${zoneId}`, {
+        headers: { 'Accept': 'application/geo+json' }
+      });
+      if (!r.ok) throw new Error(r.status);
+      const j = await r.json();
+      const geom = j.geometry || null;
+      zoneGeomCache[zoneId] = geom;
+      return geom;
+    } catch(e) {
+      // fallback: try the other type
+      try {
+        const alt = isCounty ? 'forecast' : 'county';
+        const r2 = await fetch(`https://api.weather.gov/zones/${alt}/${zoneId}`, {
+          headers: { 'Accept': 'application/geo+json' }
+        });
+        if (!r2.ok) throw new Error(r2.status);
+        const j2 = await r2.json();
+        const geom2 = j2.geometry || null;
+        zoneGeomCache[zoneId] = geom2;
+        return geom2;
+      } catch(e2) {
+        zoneGeomCache[zoneId] = null;
+        return null;
+      }
+    } finally {
+      delete zoneInflight[zoneId];
+    }
+  })();
+  return zoneInflight[zoneId];
+}
+
+// Resolve geometry for a single alert from the fast API.
+// Priority:
+//   1. alert.coordinates  – raw [[lat,lng],...] polygon in the API response (flip to GeoJSON [lng,lat])
+//   2. alert.ugc          – fetch each zone's geometry and merge
+async function resolveAlertGeometry(alert) {
+  // ── 1. Direct coordinate polygon ──────────────────────────────────────────
+  if (alert.coordinates && alert.coordinates.length >= 3) {
+    // API gives [lat, lng]; GeoJSON needs [lng, lat]
+    const ring = alert.coordinates.map(([lat, lng]) => [lng, lat]);
+    // Close the ring if needed
+    const first = ring[0], last = ring[ring.length - 1];
+    if (first[0] !== last[0] || first[1] !== last[1]) ring.push([...first]);
+    return { type: 'Polygon', coordinates: [ring] };
+  }
+
+  // ── 2. UGC zone lookup ────────────────────────────────────────────────────
+  const ugc = alert.ugc || [];
+  if (!ugc.length) return null;
+
+  const geoms = await Promise.all(ugc.map(id => fetchZoneGeometry(id)));
+  const valid  = geoms.filter(g => g && g.coordinates && g.coordinates.length);
+  if (!valid.length) return null;
+  if (valid.length === 1) return valid[0];
+
+  // Merge all polygons into one MultiPolygon
+  const allRings = [];
+  valid.forEach(g => {
+    if (g.type === 'Polygon')      allRings.push(g.coordinates);
+    else if (g.type === 'MultiPolygon') allRings.push(...g.coordinates);
+  });
+  return { type: 'MultiPolygon', coordinates: allRings };
+}
+
+// =============================================
+//  RENDER ALERTS — sidebar list
+// =============================================
+function renderAlerts(alerts) {
+  const list = document.getElementById('alerts-list');
+  let filtered = alerts.filter(a => isAlertVisible(a));
+  if (alertFilter !== 'all') {
+    filtered = filtered.filter(a => {
+      const sig = a.properties?.vtec?.significance || a.significance || '';
+      return getSeverity(sig, a.event) === alertFilter;
+    });
+  }
+
+  const badge = document.getElementById('alert-count-badge');
+  badge.textContent = filtered.length;
+  badge.className = filtered.length > 0 ? 'pulse' : 'calm';
+
+  if (filtered.length === 0) {
+    list.innerHTML = `<div style="color:var(--dim);font-size:12px;text-align:center;padding:20px">No active alerts</div>`;
+    return;
+  }
+
+  filtered.sort((a, b) => {
+    const order = { warning: 0, watch: 1, advisory: 2, statement: 3, other: 4 };
+    const sa = getSeverity(a.properties?.vtec?.significance, a.event);
+    const sb = getSeverity(b.properties?.vtec?.significance, b.event);
+    return (order[sa] || 99) - (order[sb] || 99);
+  });
+
+  list.innerHTML = filtered.map(a => {
+    const sig = a.properties?.vtec?.significance || '';
+    const sev = getSeverity(sig, a.event);
+    const color = alertColor(a);
+    const exp = a.expires ? new Date(a.expires).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+    const info = a.alertinfo || {};
+    const hasGeom = !!(a._resolvedGeom || a.geometry);
+    return `<div class="alert-card sev-${sev}" data-id="${a.id}" style="border-left-color:${color}">
+      <div class="evt" style="color:${color}">${a.event || 'Alert'} ${hasGeom ? '<span style="font-size:9px;opacity:0.6;margin-left:4px">◆ MAP</span>' : ''}</div>
+      <div class="area">${a.areaDesc || ''}</div>
+      <div class="expires">EXP: ${exp}</div>
+      <div class="detail">
+        ${info.WHAT ? `<div class="what-line"><strong>WHAT:</strong> ${info.WHAT}</div>` : ''}
+        ${info.WHEN ? `<div class="what-line"><strong>WHEN:</strong> ${info.WHEN}</div>` : ''}
+        ${info.IMPACTS ? `<div class="what-line"><strong>IMPACTS:</strong> ${info.IMPACTS}</div>` : ''}
+        <div class="what-line" style="margin-top:6px">
+          <button class="btn" style="font-size:10px;padding:3px 8px" onclick="zoomToAlert('${a.id}')">🗺 Zoom to Area</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.alert-card').forEach(card => {
+    card.addEventListener('click', e => {
+      if (e.target.tagName === 'BUTTON') return;
+      card.classList.toggle('expanded');
+    });
+  });
+}
+
+window.zoomToAlert = function(id) {
+  const alert = (alertsData.all || []).find(a => a.id === id);
+  if (!alert) return;
+  const geom = alert._resolvedGeom || alert.geometry;
+  if (geom) {
+    try {
+      const l = L.geoJSON({ type: 'Feature', geometry: geom });
+      map.fitBounds(l.getBounds(), { padding: [60, 60] });
+    } catch(e) {}
+  }
+};
+
+// =============================================
+//  RENDER ALERT POLYGONS ON MAP
+// =============================================
+// Individual per-alert layers so we can highlight them
+const alertPolygonLayers = {};   // alertId -> Leaflet layer
+let alertLayerGroup = L.layerGroup().addTo(map);
+state.alertLayer = alertLayerGroup;
+
+function buildAlertPopupContent(a) {
+  const sig = a.properties?.vtec?.significance || '';
+  const sev = getSeverity(sig, a.event);
+  const color = alertColor(a);
+  const info = a.alertinfo || {};
+  const exp = a.expires ? new Date(a.expires).toLocaleString('en-US', {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+  return `<div style="font-family:'Barlow Condensed',sans-serif;min-width:200px;max-width:280px">
+    <div style="font-size:15px;font-weight:700;color:${color};margin-bottom:4px">${a.event || 'Alert'}</div>
+    <div style="font-size:11px;color:#aaa;margin-bottom:6px">${a.areaDesc || ''}</div>
+    ${info.WHAT ? `<div style="font-size:11px;margin-bottom:3px"><strong style="color:${color}">WHAT:</strong> ${info.WHAT}</div>` : ''}
+    ${info.WHEN ? `<div style="font-size:11px;margin-bottom:3px"><strong style="color:${color}">WHEN:</strong> ${info.WHEN}</div>` : ''}
+    ${info.IMPACTS ? `<div style="font-size:11px;margin-bottom:3px"><strong style="color:${color}">IMPACTS:</strong> ${info.IMPACTS}</div>` : ''}
+    <div style="font-size:10px;color:#666;margin-top:6px;font-family:monospace">EXP: ${exp}</div>
+  </div>`;
+}
+
+// Alert polygon fill opacity (controlled by slider)
+let alertFillOpacity = 0.18;
+
+function addAlertPolygon(alert, geometry) {
+  if (alertPolygonLayers[alert.id]) {
+    alertLayerGroup.removeLayer(alertPolygonLayers[alert.id]);
+  }
+  const sig = alert.properties?.vtec?.significance || '';
+  const sev = getSeverity(sig, alert.event);
+  const color = alertColor(alert);
+
+  const layer = L.geoJSON({ type: 'Feature', geometry, properties: alert }, {
+    style: {
+      color: color,
+      weight: 2,
+      fillColor: color,
+      fillOpacity: alertFillOpacity,
+      opacity: 0.9,
+      dashArray: sev === 'watch' ? '6,4' : sev === 'advisory' ? '3,3' : null
+    }
+  });
+
+  // Pulsing highlight on warnings
+  if (sev === 'warning') {
+    let pulse = false;
+    const pulseTimer = setInterval(() => {
+      if (!alertPolygonLayers[alert.id]) { clearInterval(pulseTimer); return; }
+      pulse = !pulse;
+      layer.setStyle({ fillOpacity: pulse ? 0.30 : 0.14 });
+    }, 1200);
+    layer._pulseTimer = pulseTimer;
+  }
+
+  layer.bindPopup(buildAlertPopupContent(alert), {
+    maxWidth: 300,
+    className: 'alert-popup'
+  });
+
+  layer.on('mouseover', function() {
+    this.setStyle({ weight: 3, fillOpacity: 0.35 });
+    this.bringToFront();
+  });
+  layer.on('mouseout', function() {
+    const isSevWarning = getSeverity(sig, alert.event) === 'warning';
+    this.setStyle({ weight: 2, fillOpacity: isSevWarning ? 0.18 : 0.18 });
+  });
+
+  alertPolygonLayers[alert.id] = layer;
+  if (state.showAlerts && isAlertVisible(alert)) alertLayerGroup.addLayer(layer);
+  // Mark alert as having resolved geometry
+  alert._resolvedGeom = geometry;
+}
+
+async function renderAlertLayer(alerts) {
+  // Remove polygons for expired/removed alerts
+  const currentIds = new Set(alerts.map(a => a.id));
+  Object.keys(alertPolygonLayers).forEach(id => {
+    if (!currentIds.has(id)) {
+      const l = alertPolygonLayers[id];
+      if (l._pulseTimer) clearInterval(l._pulseTimer);
+      alertLayerGroup.removeLayer(l);
+      delete alertPolygonLayers[id];
+    }
+  });
+
+  // For each alert without a polygon yet, resolve geometry and draw
+  const pending = alerts.filter(a => !alertPolygonLayers[a.id]);
+  // After resolving, hide polygons that are currently disabled
+  // (applyAlertVisibility handles showing/hiding existing ones)
+  
+  // Process in batches to avoid hammering the API
+  const BATCH = 8;
+  for (let i = 0; i < pending.length; i += BATCH) {
+    const batch = pending.slice(i, i + BATCH);
+    await Promise.all(batch.map(async alert => {
+      try {
+        const geom = await resolveAlertGeometry(alert);
+        if (geom) {
+          addAlertPolygon(alert, geom);
+          // Re-render sidebar to show ◆ MAP indicator
+          renderAlerts(alertsData.all || []);
+        }
+      } catch(e) { /* skip */ }
+    }));
+  }
+}
+
+document.getElementById('t-alerts').addEventListener('change', function() {
+  state.showAlerts = this.checked;
+  if (state.showAlerts) {
+    alertLayerGroup.addTo(map);
+  } else {
+    map.removeLayer(alertLayerGroup);
+  }
+});
+
+// Filter buttons
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    alertFilter = btn.dataset.filter;
+    renderAlerts(alertsData.all || []);
+  });
+});
+
+// =============================================
+//  TOAST NOTIFICATIONS
+// =============================================
+function showToast(alert) {
+  const toast = document.getElementById('toast');
+  const color = alertColor(alert);
+  const div = document.createElement('div');
+  div.className = 'toast-item';
+  div.style.borderLeftColor = color;
+  div.style.borderColor = color.replace(')', ',0.3)').replace('rgb', 'rgba');
+  div.innerHTML = `<div class="toast-event" style="color:${color}">🔔 ${alert.event}</div><div class="toast-area">${alert.areaDesc || ''}</div>`;
+  toast.appendChild(div);
+  setTimeout(() => { div.style.opacity = '0'; div.style.transition = 'opacity 0.5s'; setTimeout(() => div.remove(), 500); }, 6000);
+}
+
+// =============================================
+//  BASEMAP SWITCHER
+// =============================================
+document.getElementById('btn-streets').addEventListener('click', () => switchBasemap('streets'));
+document.getElementById('btn-dark').addEventListener('click', () => switchBasemap('dark'));
+document.getElementById('btn-satellite').addEventListener('click', () => switchBasemap('satellite'));
+
+function switchBasemap(name) {
+  Object.values(tileLayers).forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
+  tileLayers[name].addTo(map);
+  document.querySelectorAll('.map-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`btn-${name}`).classList.add('active');
+  state.currentBasemap = name;
+}
+
+// =============================================
+//  STATUS HELPERS
+// =============================================
+function setRadarStatus(s) {
+  const dot = document.getElementById('radar-dot');
+  const lbl = document.getElementById('radar-status');
+  dot.className = 'status-dot ' + s;
+  lbl.textContent = s === 'ok' ? 'Radar: live' : s === 'loading' ? 'Radar: loading...' : 'Radar: error';
+}
+function setAlertStatus(s) {
+  const dot = document.getElementById('alert-dot');
+  const lbl = document.getElementById('alert-status');
+  dot.className = 'status-dot ' + s;
+  lbl.textContent = s === 'ok' ? 'Alerts: live' : s === 'loading' ? 'Alerts: loading...' : 'Alerts: error';
+}
+
+function updateTimestamp() {
+  const ts = document.getElementById('timestamp-overlay');
+  ts.textContent = new Date().toUTCString().replace(' GMT', ' UTC');
+}
+
+// =============================================
+//  CLOCK
+// =============================================
+function updateClock() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  document.getElementById('clock').textContent =
+    `${pad(now.getUTCHours())}:${pad(now.getUTCMinutes())}:${pad(now.getUTCSeconds())} UTC`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+
+// =============================================
+//  SETTINGS PANEL
+// =============================================
+const settingsPanel = document.getElementById('settings-panel');
+const btnSettings   = document.getElementById('btn-settings');
+const btnSettingsClose = document.getElementById('btn-settings-close');
+
+btnSettings.addEventListener('click', () => {
+  settingsPanel.classList.add('open');
+  btnSettings.classList.add('active');
+  refreshEventTypeList();
+});
+btnSettingsClose.addEventListener('click', () => {
+  settingsPanel.classList.remove('open');
+  btnSettings.classList.remove('active');
+});
+
+// Severity toggles
+document.querySelectorAll('.sev-toggle').forEach(cb => {
+  cb.addEventListener('change', function() {
+    const sev = this.dataset.sev;
+    const row = this.closest('.settings-row');
+    if (this.checked) {
+      disabledSeverities.delete(sev);
+      row.classList.remove('muted');
+    } else {
+      disabledSeverities.add(sev);
+      row.classList.add('muted');
+    }
+    applyAlertVisibility();
+  });
+});
+
+// Enable/disable all buttons
+document.getElementById('btn-enable-all').addEventListener('click', () => {
+  disabledSeverities.clear();
+  disabledEventTypes.clear();
+  document.querySelectorAll('.sev-toggle').forEach(cb => { cb.checked = true; cb.closest('.settings-row').classList.remove('muted'); });
+  document.querySelectorAll('.evt-toggle').forEach(cb => { cb.checked = true; cb.closest('.event-type-row').classList.remove('muted'); });
+  applyAlertVisibility();
+});
+document.getElementById('btn-disable-all').addEventListener('click', () => {
+  const sevs = ['warning','watch','advisory','statement','other'];
+  sevs.forEach(s => disabledSeverities.add(s));
+  document.querySelectorAll('.sev-toggle').forEach(cb => { cb.checked = false; cb.closest('.settings-row').classList.add('muted'); });
+  // Disable all known event types too
+  (alertsData.all || []).forEach(a => disabledEventTypes.add(a.event));
+  document.querySelectorAll('.evt-toggle').forEach(cb => { cb.checked = false; cb.closest('.event-type-row').classList.add('muted'); });
+  applyAlertVisibility();
+});
+
+// Build/refresh the per-event-type list
+function refreshEventTypeList() {
+  const list = document.getElementById('event-type-list');
+  const alerts = alertsData.all || [];
+  if (!alerts.length) { list.innerHTML = '<div style="color:var(--dim);font-size:11px;padding:8px 0">No active events</div>'; return; }
+
+  // Count occurrences per event name
+  const counts = {};
+  alerts.forEach(a => { counts[a.event] = (counts[a.event] || 0) + 1; });
+  const events = Object.keys(counts).sort();
+
+  list.innerHTML = events.map(evt => {
+    const checked = !disabledEventTypes.has(evt);
+    // Derive color from first matching alert's severity
+    const sample = alerts.find(a => a.event === evt);
+    const sig = sample?.properties?.vtec?.significance || '';
+    const color = sample ? alertColor(sample) : getAlertColor(evt, sig);
+    return `<div class="event-type-row${checked ? '' : ' muted'}" data-evt="${evt.replace(/"/g,'&quot;')}">
+      <div class="settings-swatch" style="background:${color};border-radius:2px"></div>
+      <span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${evt}</span>
+      <span class="event-count">${counts[evt]}</span>
+      <label class="toggle"><input type="checkbox" class="evt-toggle" data-evt="${evt.replace(/"/g,'&quot;')}" ${checked ? 'checked' : ''}><span class="slider"></span></label>
+    </div>`;
+  }).join('');
+
+  list.querySelectorAll('.evt-toggle').forEach(cb => {
+    cb.addEventListener('change', function() {
+      const evt = this.dataset.evt;
+      const row = this.closest('.event-type-row');
+      if (this.checked) {
+        disabledEventTypes.delete(evt);
+        row.classList.remove('muted');
+      } else {
+        disabledEventTypes.add(evt);
+        row.classList.add('muted');
+      }
+      applyAlertVisibility();
+    });
+  });
+}
+
+// Show/hide alert polygons and sidebar cards based on settings
+function applyAlertVisibility() {
+  const alerts = alertsData.all || [];
+
+  // Map polygons
+  Object.entries(alertPolygonLayers).forEach(([id, layer]) => {
+    const alert = alerts.find(a => a.id === id);
+    if (!alert) return;
+    if (isAlertVisible(alert)) {
+      if (state.showAlerts && !alertLayerGroup.hasLayer(layer)) alertLayerGroup.addLayer(layer);
+    } else {
+      if (alertLayerGroup.hasLayer(layer)) alertLayerGroup.removeLayer(layer);
+    }
+  });
+
+  // Sidebar list
+  renderAlerts(alerts);
+}
+
+
+// =============================================
+//  ALERT TOUR
+// =============================================
+const tourState = {
+  active: false,
+  alerts: [],       // filtered+visible alerts to tour
+  idx: 0,
+  playing: false,
+  dwellMs: 5000,
+  timer: null,
+  highlightLayer: null
+};
+
+const tourOverlay  = document.getElementById('tour-overlay');
+const tourBtn      = document.getElementById('btn-tour');
+const tourClose    = document.getElementById('tour-close');
+const tourPrev     = document.getElementById('tour-prev');
+const tourNext     = document.getElementById('tour-next');
+const tourPlayBtn  = document.getElementById('tour-play-btn');
+const tourPlayIcon = document.getElementById('tour-play-icon');
+const tourPauseIcon= document.getElementById('tour-pause-icon');
+const tourPlayLabel= document.getElementById('tour-play-label');
+const tourSpeedSlider = document.getElementById('tour-speed-slider');
+const tourSpeedVal = document.getElementById('tour-speed-val');
+
+// Sort order: warnings first, then watches, advisories, etc.
+const SEV_ORDER = { warning:0, watch:1, advisory:2, statement:3, other:4 };
+
+function startTour() {
+  // Collect visible alerts that have a resolved polygon
+  const all = alertsData.all || [];
+  const candidates = all
+    .filter(a => isAlertVisible(a) && a._resolvedGeom)
+    .sort((a, b) => {
+      const sa = getSeverity(a.properties?.vtec?.significance||'', a.event);
+      const sb = getSeverity(b.properties?.vtec?.significance||'', b.event);
+      return (SEV_ORDER[sa]||9) - (SEV_ORDER[sb]||9);
+    });
+
+  if (!candidates.length) {
+    // No polygons loaded yet — use all visible alerts sorted by severity
+    tourState.alerts = all
+      .filter(a => isAlertVisible(a))
+      .sort((a,b)=>{
+        const sa=getSeverity(a.properties?.vtec?.significance||'',a.event);
+        const sb=getSeverity(b.properties?.vtec?.significance||'',b.event);
+        return (SEV_ORDER[sa]||9)-(SEV_ORDER[sb]||9);
+      });
+  } else {
+    tourState.alerts = candidates;
+  }
+
+  if (!tourState.alerts.length) {
+    alert('No active alerts to tour!');
+    return;
+  }
+
+  tourState.active = true;
+  tourState.idx    = 0;
+  tourOverlay.classList.add('active');
+  tourBtn.classList.add('active');
+
+  // Close settings if open
+  document.getElementById('settings-panel').classList.remove('open');
+
+  showTourAlert(0);
+}
+
+function stopTour() {
+  tourState.active  = false;
+  tourState.playing = false;
+  clearTimeout(tourState.timer);
+  tourOverlay.classList.remove('active');
+  tourBtn.classList.remove('active');
+  tourPlayBtn.classList.remove('playing');
+  tourPlayIcon.style.display  = '';
+  tourPauseIcon.style.display = 'none';
+  tourPlayLabel.textContent   = 'Auto';
+  clearTourHighlight();
+}
+
+function showTourAlert(idx) {
+  const alerts = tourState.alerts;
+  if (!alerts.length) return;
+  idx = ((idx % alerts.length) + alerts.length) % alerts.length;
+  tourState.idx = idx;
+  const alert = alerts[idx];
+
+  // Progress bar
+  const pct = alerts.length > 1 ? (idx / (alerts.length - 1)) * 100 : 100;
+  document.getElementById('tour-progress-fill').style.width = pct + '%';
+  document.getElementById('tour-counter').textContent = `${idx + 1} / ${alerts.length}`;
+
+  // Severity badge
+  const sig  = alert.properties?.vtec?.significance || '';
+  const sev  = getSeverity(sig, alert.event);
+  const color= alertColor(alert);
+  const badge= document.getElementById('tour-sev-badge');
+  badge.textContent  = sev.toUpperCase();
+  badge.style.color  = color;
+  badge.style.borderColor = color;
+  badge.style.textShadow  = `0 0 8px ${color}`;
+
+  // Event & area
+  const evtEl = document.getElementById('tour-event-name');
+  evtEl.textContent  = alert.event || 'Alert';
+  evtEl.style.color  = color;
+  document.getElementById('tour-area').textContent = alert.areaDesc || '';
+
+  // Detail rows
+  const info = alert.alertinfo || {};
+  const whatEl    = document.getElementById('tour-what');
+  const whenEl    = document.getElementById('tour-when');
+  const impactsEl = document.getElementById('tour-impacts');
+  whatEl.innerHTML    = info.WHAT    ? `<strong>WHAT:</strong> ${info.WHAT}`    : '';
+  whenEl.innerHTML    = info.WHEN    ? `<strong>WHEN:</strong> ${info.WHEN}`    : '';
+  impactsEl.innerHTML = info.IMPACTS ? `<strong>IMPACTS:</strong> ${info.IMPACTS}` : '';
+
+  // Expires
+  const exp = alert.expires
+    ? new Date(alert.expires).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})
+    : '';
+  document.getElementById('tour-expires').textContent = exp ? `Expires: ${exp}` : '';
+
+  // Map: zoom to alert polygon or area
+  zoomToTourAlert(alert, color);
+
+  // Highlight corresponding sidebar card
+  highlightSidebarCard(alert.id);
+
+  // Auto-advance timer
+  if (tourState.playing) scheduleTourAdvance();
+}
+
+function zoomToTourAlert(alert, color) {
+  clearTourHighlight();
+  const geom = alert._resolvedGeom || alert.geometry;
+  if (geom) {
+    try {
+      const tempLayer = L.geoJSON({ type:'Feature', geometry:geom }, {
+        style: {
+          color: color,
+          weight: 3,
+          fillColor: color,
+          fillOpacity: 0.25,
+          opacity: 1,
+          className: 'tour-highlight-ring'
+        }
+      }).addTo(map);
+      tourState.highlightLayer = tempLayer;
+      map.fitBounds(tempLayer.getBounds(), { padding: [50, 50], maxZoom: 10 });
+    } catch(e) {}
+  }
+}
+
+function clearTourHighlight() {
+  if (tourState.highlightLayer) {
+    map.removeLayer(tourState.highlightLayer);
+    tourState.highlightLayer = null;
+  }
+}
+
+function highlightSidebarCard(id) {
+  document.querySelectorAll('.alert-card').forEach(c => c.style.outline = '');
+  const card = document.querySelector(`.alert-card[data-id="${CSS.escape(id)}"]`);
+  if (card) {
+    card.style.outline = '1px solid var(--accent2)';
+    card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+
+function scheduleTourAdvance() {
+  clearTimeout(tourState.timer);
+  tourState.timer = setTimeout(() => {
+    if (tourState.playing && tourState.active) {
+      const next = (tourState.idx + 1) % tourState.alerts.length;
+      showTourAlert(next);
+    }
+  }, tourState.dwellMs);
+}
+
+// Controls
+tourBtn.addEventListener('click', () => {
+  if (tourState.active) stopTour(); else startTour();
+});
+tourClose.addEventListener('click', stopTour);
+
+tourPrev.addEventListener('click', () => {
+  clearTimeout(tourState.timer);
+  showTourAlert(tourState.idx - 1);
+  if (tourState.playing) scheduleTourAdvance();
+});
+tourNext.addEventListener('click', () => {
+  clearTimeout(tourState.timer);
+  showTourAlert(tourState.idx + 1);
+  if (tourState.playing) scheduleTourAdvance();
+});
+
+tourPlayBtn.addEventListener('click', () => {
+  tourState.playing = !tourState.playing;
+  if (tourState.playing) {
+    tourPlayBtn.classList.add('playing');
+    tourPlayIcon.style.display  = 'none';
+    tourPauseIcon.style.display = '';
+    tourPlayLabel.textContent   = 'Pause';
+    scheduleTourAdvance();
+  } else {
+    tourPlayBtn.classList.remove('playing');
+    tourPlayIcon.style.display  = '';
+    tourPauseIcon.style.display = 'none';
+    tourPlayLabel.textContent   = 'Auto';
+    clearTimeout(tourState.timer);
+  }
+});
+
+tourSpeedSlider.addEventListener('input', function() {
+  tourState.dwellMs = parseInt(this.value) * 1000;
+  tourSpeedVal.textContent = this.value + 's';
+});
+
+// Keyboard navigation when tour is active
+document.addEventListener('keydown', e => {
+  if (!tourState.active) return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { clearTimeout(tourState.timer); showTourAlert(tourState.idx + 1); if (tourState.playing) scheduleTourAdvance(); }
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   { clearTimeout(tourState.timer); showTourAlert(tourState.idx - 1); if (tourState.playing) scheduleTourAdvance(); }
+  if (e.key === 'Escape') stopTour();
+  if (e.key === ' ') { e.preventDefault(); tourPlayBtn.click(); }
+});
+
+
+// =============================================
+//  ALERT COLOR LEGEND TOGGLE
+// =============================================
+document.getElementById('btn-toggle-alert-legend').addEventListener('click', function() {
+  const panel = document.getElementById('alert-color-legend');
+  const open = panel.style.display === 'block';
+  panel.style.display = open ? 'none' : 'block';
+  this.textContent = open ? 'Alert Colors ▸' : 'Alert Colors ▾';
+});
+
+// Full color guide modal
+document.getElementById('btn-full-legend').addEventListener('click', () => {
+  buildColorGuideModal();
+});
+
+function buildColorGuideModal() {
+  const existing = document.getElementById('color-guide-modal');
+  if (existing) { existing.remove(); return; }
+
+  const cats = [
+    { label: 'Tornado', items: [
+      ['Tornado Warning','#ff0000'], ['Tornado Watch','#ffff00'], ['Tornado Emergency','#ff0000']
+    ]},
+    { label: 'Severe Thunderstorm', items: [
+      ['Severe Thunderstorm Warning','#ffa500'], ['Severe Thunderstorm Watch','#db7093'],
+      ['Destructive Severe Thunderstorm Warning','#ff6600']
+    ]},
+    { label: 'Flash Flood', items: [
+      ['Flash Flood Warning','#8b0000'], ['Flash Flood Watch','#2e8b57'],
+      ['Flash Flood Emergency','#c0392b'], ['Flash Flood Statement','#8b0000']
+    ]},
+    { label: 'Flood', items: [
+      ['Flood Warning','#00ff00'], ['Flood Watch','#2e8b57'],
+      ['Flood Advisory','#00ff7f'], ['Flood Statement','#00ff00'],
+      ['Areal Flood Warning','#00ff00'], ['Areal Flood Advisory','#00ff7f']
+    ]},
+    { label: 'Marine', items: [
+      ['Special Marine Warning','#731e56'], ['Marine Weather Statement','#ffdab9'],
+      ['Gale Warning','#dda0dd'], ['Storm Warning','#9400d3'],
+      ['Hazardous Seas Warning','#d8bfd8'], ['Rip Current Statement','#40e0d0'],
+      ['Coastal Flood Warning','#228b22'], ['Coastal Flood Advisory','#7cfc00'],
+      ['High Surf Warning','#228b22'], ['High Surf Advisory','#ba55d3'],
+      ['Tsunami Warning','#fd6347'], ['Tsunami Watch','#ff00ff'],
+      ['Small Craft Advisory','#d2b48c']
+    ]},
+    { label: 'Winter', items: [
+      ['Blizzard Warning','#ff4500'], ['Winter Storm Warning','#ff69b4'],
+      ['Winter Storm Watch','#4169e1'], ['Winter Weather Advisory','#7b68ee'],
+      ['Ice Storm Warning','#8b008b'], ['Freeze Warning','#6495ed'],
+      ['Freeze Watch','#00ffff'], ['Frost Advisory','#6495ed'],
+      ['Snow Squall Warning','#c71585'], ['Lake Effect Snow Warning','#008b8b'],
+      ['Heavy Snow Warning','#ff69b4']
+    ]},
+    { label: 'Wind', items: [
+      ['High Wind Warning','#daa520'], ['High Wind Watch','#b8860b'],
+      ['Wind Advisory','#d2b48c'], ['Extreme Wind Warning','#ff8c00'],
+      ['Wind Chill Warning','#b0c4de'], ['Wind Chill Advisory','#afeeee']
+    ]},
+    { label: 'Fire Weather', items: [
+      ['Red Flag Warning','#ff1493'], ['Fire Weather Watch','#ffdead'],
+      ['Extreme Fire Danger','#e9967a']
+    ]},
+    { label: 'Tropical', items: [
+      ['Hurricane Warning','#ff0000'], ['Hurricane Watch','#ff00ff'],
+      ['Tropical Storm Warning','#b22222'], ['Tropical Storm Watch','#f08080'],
+      ['Storm Surge Warning','#b58900'], ['Storm Surge Watch','#db7093'],
+      ['Typhoon Warning','#dc143c']
+    ]},
+    { label: 'Heat', items: [
+      ['Excessive Heat Warning','#c71585'], ['Excessive Heat Watch','#800000'],
+      ['Heat Advisory','#ff7f50']
+    ]},
+    { label: 'Special', items: [
+      ['Special Weather Statement','#9370db'], ['Hazardous Weather Outlook','#eee8aa'],
+      ['Dense Fog Advisory','#708090'], ['Dust Storm Warning','#ffe4c4'],
+      ['Air Quality Alert','#808000'], ['Ashfall Warning','#696969'],
+      ['Avalanche Warning','#1e90ff'], ['Avalanche Watch','#f4a460']
+    ]},
+  ];
+
+  const modal = document.createElement('div');
+  modal.id = 'color-guide-modal';
+  modal.style.cssText = `
+    position: fixed; inset: 0; z-index: 9000;
+    background: rgba(4,8,14,0.96); backdrop-filter: blur(4px);
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 20px; overflow-y: auto;
+  `;
+
+  const inner = document.createElement('div');
+  inner.style.cssText = `
+    background: #0a1018; border: 1px solid #1a2535; border-radius: 6px;
+    max-width: 640px; width: 100%; padding: 20px;
+    font-family: 'Barlow Condensed', sans-serif;
+  `;
+
+  inner.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:16px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#00d4ff">NWS Alert Color Guide</div>
+      <button onclick="document.getElementById('color-guide-modal').remove()" style="background:transparent;border:1px solid #1a2535;color:#4a6080;cursor:pointer;width:28px;height:28px;border-radius:3px;font-size:14px;transition:all 0.15s" onmouseover="this.style.borderColor='#ff3b3b';this.style.color='#ff3b3b'" onmouseout="this.style.borderColor='#1a2535';this.style.color='#4a6080'">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${cats.map(cat => `
+        <div>
+          <div style="font-size:10px;letter-spacing:2px;text-transform:uppercase;color:#4a6080;margin-bottom:6px">${cat.label}</div>
+          ${cat.items.map(([name, color]) => `
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:2px;margin-bottom:2px;background:#0d1520;border:1px solid rgba(255,255,255,0.03)">
+              <div style="width:12px;height:12px;background:${color};border-radius:2px;flex-shrink:0;border:1px solid rgba(255,255,255,0.15)"></div>
+              <span style="font-size:11px;color:#c8d8e8;flex:1">${name}</span>
+              <span style="font-family:monospace;font-size:9px;color:#4a6080">${color}</span>
+            </div>
+          `).join('')}
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  modal.appendChild(inner);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+// =============================================
+//  INIT & POLLING
+// =============================================
+async function init() {
+  loadRadar();
+  loadCounties();
+  loadStations();
+  await refreshAlerts();
+  updateTimestamp();
+}
+
+// Fast alerts poll every 30s, NWS radar refresh every 5min
+setInterval(refreshAlerts, 30000);
+setInterval(() => { if (!state.animPlaying) loadRadar(); }, 300000);
+setInterval(updateTimestamp, 60000);
+
+init();
+</script>
+</style>
+</body>
+</html>
