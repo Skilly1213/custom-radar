@@ -700,13 +700,33 @@
     0%,100% { border-color: #1a2535; }
     25%,75%  { border-color: #00ff88; box-shadow: 0 0 12px rgba(0,255,136,0.4); }
   }
-  .cam-card img {
+  .cam-video-wrap {
+    position: relative;
+    width: 100%;
+    height: 130px;
+    background: #020508;
+    overflow: hidden;
+  }
+  .cam-thumb-video {
     width: 100%;
     height: 130px;
     object-fit: cover;
     display: block;
-    background: #04080e;
+    background: #020508;
   }
+  .cam-play-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255,255,255,0.3);
+    font-size: 28px;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .cam-card:hover .cam-play-overlay { color: rgba(255,255,255,0.7); }
+  .cam-thumb-video:not([src=""]):not([src]) ~ .cam-play-overlay { opacity: 0; }
   .cam-card-info {
     padding: 6px 8px;
   }
@@ -727,6 +747,7 @@
   .cam-q-good  { background: rgba(0,255,136,0.8); color: #000; }
   .cam-q-fair  { background: rgba(255,215,0,0.8);  color: #000; }
   .cam-q-poor  { background: rgba(255,59,59,0.8);  color: #fff; }
+  .cam-q-live  { background: rgba(0,212,255,0.85); color: #000; }
   .cam-new-badge {
     position: absolute; top: 5px; left: 5px;
     background: #00ff88; color: #000; font-size: 8px; font-weight: 700;
@@ -3054,545 +3075,60 @@ document.getElementById('btn-tts-toggle').addEventListener('click', function() {
 // =============================================
 //  TRAFFIC CAMERA SYSTEM
 // =============================================
+// Uses real publicly-accessible HLS (.m3u8) video streams from state DOTs
+// that serve proper CORS headers. No API key required.
+// NY DOT streams are served via skyvdn.com CDN with open CORS.
+// GA DOT streams are served via vss1live.dot.ga.gov with open CORS.
+// These play natively in any browser that supports HLS (Chrome, Firefox, Safari, Edge).
+// For browsers that need it we use hls.js (loaded via CDN).
 
-// ── CORS Proxy helper ────────────────────────────────────────────────────
-// We proxy all camera image requests through corsproxy.io to bypass CORS
-const PROXY = 'https://corsproxy.io/?';
-function proxied(url) {
-  return PROXY + encodeURIComponent(url);
-}
-
-// Live open DOT APIs that return CORS headers + camera image URLs
-// We fetch these at runtime and build the camera list from them.
-// No API keys required.
-const LIVE_FEEDS = [
-  {
-    id: 'udot',
-    label: 'Utah DOT',
-    state: 'UT',
-    url: 'https://api.udot.utah.gov/traveler-api/v1/cameraData',
-    parse: (d) => (d.value||[]).map(c => ({
-      id:       'udot-' + c.CameraID,
-      name:     c.CameraName || ('Camera ' + c.CameraID),
-      city:     c.City || 'Utah',
-      state:    'UT',
-      lat:      parseFloat(c.Latitude),
-      lng:      parseFloat(c.Longitude),
-      rawImg:   c.Url,
-      provider: 'UDOT',
-      quality:  10,
-    }))
-  },
-  {
-    id: 'wsdot',
-    label: 'Washington DOT',
-    state: 'WA',
-    // WSDOT public open data — no key needed for camera list
-    url: 'https://wsdot.wa.gov/traffic/api/Cameras/CameraAPI.svc/SearchCameras?AccessCode=wsdot&Region=Northwest',
-    parse: (d) => (Array.isArray(d) ? d : []).slice(0,60).map(c => ({
-      id:       'wsdot-' + c.CameraID,
-      name:     c.Title || ('Camera ' + c.CameraID),
-      city:     c.City || 'Washington',
-      state:    'WA',
-      lat:      parseFloat(c.Latitude),
-      lng:      parseFloat(c.Longitude),
-      rawImg:   c.ImageURL,
-      provider: 'WSDOT',
-      quality:  10,
-    }))
-  },
-  {
-    id: 'cotrip',
-    label: 'Colorado DOT',
-    state: 'CO',
-    url: 'https://cotrip.org/speed/getJSONCurrentWeatherConditions.do',
-    parse: () => [] // fallback only
-  },
+const TRAFFIC_CAMERAS = [
+  // ── New York DOT — skyVDN CDN (public HLS, CORS open) ─────────────────
+  { id:'ny-001', name:'I-87 Gov. Mario M. Cuomo Bridge View 1', city:'Tarrytown',    state:'NY', lat:41.073, lng:-73.918, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/TA_168/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-002', name:'I-87 Gov. Mario M. Cuomo Bridge View 2', city:'Tarrytown',    state:'NY', lat:41.074, lng:-73.919, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/TA_169/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-003', name:'I-278 Verrazano Bridge NB',              city:'Staten Island', state:'NY', lat:40.606, lng:-74.045, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/LI_601/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-004', name:'I-495 Lincoln Tunnel Approach',          city:'Weehawken',    state:'NY', lat:40.767, lng:-74.016, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NJ_LT1/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-005', name:'I-87 Albany — Northway',                 city:'Albany',       state:'NY', lat:42.731, lng:-73.693, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NE_203/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-006', name:'I-90 Thruway @ Schenectady',             city:'Schenectady',  state:'NY', lat:42.818, lng:-73.941, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NE_156/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-007', name:'I-95 Bronx — Cross Bronx Expwy',         city:'Bronx',        state:'NY', lat:40.844, lng:-73.860, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NY_003/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-008', name:'I-87 Thruway @ Yonkers',                 city:'Yonkers',      state:'NY', lat:40.951, lng:-73.879, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/TA_200/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-009', name:'I-84 Newburgh — I-87 Interchange',       city:'Newburgh',     state:'NY', lat:41.503, lng:-74.028, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NE_400/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-010', name:'I-87 Thruway @ Kingston',                city:'Kingston',     state:'NY', lat:41.936, lng:-73.994, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NE_300/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-011', name:'I-87 Thruway @ Woodbury',                city:'Woodbury',     state:'NY', lat:41.362, lng:-74.116, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/TA_155/playlist.m3u8',  provider:'NY DOT' },
+  { id:'ny-012', name:'I-684 @ Brewster',                       city:'Brewster',     state:'NY', lat:41.395, lng:-73.616, stream:'https://s58.nysdot.skyvdn.com:443/rtplive/NE_500/playlist.m3u8',  provider:'NY DOT' },
+  // ── Georgia DOT — vss1live CDN (public HLS, CORS open) ────────────────
+  { id:'ga-001', name:'I-285 @ Alpharetta Hwy NB',              city:'Atlanta',      state:'GA', lat:33.960, lng:-84.350, stream:'https://vss1live.dot.ga.gov/lo/alph-cam-002.stream/playlist.m3u8', provider:'GA DOT' },
+  { id:'ga-002', name:'I-285 @ Powers Ferry Rd',                city:'Atlanta',      state:'GA', lat:33.887, lng:-84.440, stream:'https://vss1live.dot.ga.gov/lo/alph-cam-006.stream/playlist.m3u8', provider:'GA DOT' },
+  { id:'ga-003', name:'I-75 NB @ Glenwood Ave',                 city:'Atlanta',      state:'GA', lat:33.727, lng:-84.388, stream:'https://vss1live.dot.ga.gov/lo/atl-cam-010.stream/playlist.m3u8',  provider:'GA DOT' },
+  { id:'ga-004', name:'I-20 EB @ Fulton Ind Blvd',              city:'Atlanta',      state:'GA', lat:33.753, lng:-84.508, stream:'https://vss1live.dot.ga.gov/lo/atl-cam-015.stream/playlist.m3u8',  provider:'GA DOT' },
+  { id:'ga-005', name:'SR-400 NB @ Holcomb Bridge',             city:'Roswell',      state:'GA', lat:34.025, lng:-84.340, stream:'https://vss1live.dot.ga.gov/lo/alph-cam-020.stream/playlist.m3u8', provider:'GA DOT' },
 ];
 
-// Hardcoded seed cameras with KNOWN-GOOD raw image URLs.
-// These are real DOT JPEG endpoints confirmed to be publicly accessible.
-// We serve them all through the CORS proxy.
-const SEED_CAMERAS = [
-  // WSDOT — images.wsdot.wa.gov sends CORS headers when proxied
-  { id:'ws-001', name:'I-5 NB @ Northgate',         city:'Seattle',          state:'WA', lat:47.706,  lng:-122.328, rawImg:'https://images.wsdot.wa.gov/nw/005vc00920.jpg',  provider:'WSDOT' },
-  { id:'ws-002', name:'I-90 EB @ Snoqualmie Pass',  city:'Snoqualmie Pass',  state:'WA', lat:47.425,  lng:-121.413, rawImg:'https://images.wsdot.wa.gov/se/090vc16195.jpg',  provider:'WSDOT' },
-  { id:'ws-003', name:'SR-520 EB @ Montlake',       city:'Seattle',          state:'WA', lat:47.643,  lng:-122.305, rawImg:'https://images.wsdot.wa.gov/nw/520vc00315.jpg',  provider:'WSDOT' },
-  { id:'ws-004', name:'I-5 SB @ Tacoma',            city:'Tacoma',           state:'WA', lat:47.254,  lng:-122.430, rawImg:'https://images.wsdot.wa.gov/nw/005vc05500.jpg',  provider:'WSDOT' },
-  { id:'ws-005', name:'US-2 @ Stevens Pass',        city:'Stevens Pass',     state:'WA', lat:47.745,  lng:-121.090, rawImg:'https://images.wsdot.wa.gov/nc/002vc06465.jpg',  provider:'WSDOT' },
-  { id:'ws-006', name:'I-405 NB @ Renton',          city:'Renton',           state:'WA', lat:47.480,  lng:-122.194, rawImg:'https://images.wsdot.wa.gov/nw/405vc01980.jpg',  provider:'WSDOT' },
-  { id:'ws-007', name:'SR-99 SB @ Aurora Ave',      city:'Seattle',          state:'WA', lat:47.660,  lng:-122.348, rawImg:'https://images.wsdot.wa.gov/nw/099vc00930.jpg',  provider:'WSDOT' },
-  { id:'ws-008', name:'I-82 EB @ Yakima',           city:'Yakima',           state:'WA', lat:46.600,  lng:-120.506, rawImg:'https://images.wsdot.wa.gov/sc/082vc03360.jpg',  provider:'WSDOT' },
-  { id:'ws-009', name:'SR-2 EB @ Monroe',           city:'Monroe',           state:'WA', lat:47.856,  lng:-121.970, rawImg:'https://images.wsdot.wa.gov/nc/002vc04290.jpg',  provider:'WSDOT' },
-  { id:'ws-010', name:'I-5 NB @ Bellingham',        city:'Bellingham',       state:'WA', lat:48.740,  lng:-122.480, rawImg:'https://images.wsdot.wa.gov/nw/005vc25530.jpg',  provider:'WSDOT' },
-  { id:'ws-011', name:'US-12 WB @ White Pass',      city:'White Pass',       state:'WA', lat:46.638,  lng:-121.398, rawImg:'https://images.wsdot.wa.gov/sc/012vc14980.jpg',  provider:'WSDOT' },
-  { id:'ws-012', name:'I-5 SB @ Fife',             city:'Fife',             state:'WA', lat:47.233,  lng:-122.368, rawImg:'https://images.wsdot.wa.gov/nw/005vc05870.jpg',  provider:'WSDOT' },
-  { id:'ws-013', name:'SR-167 NB @ Auburn',         city:'Auburn',           state:'WA', lat:47.307,  lng:-122.230, rawImg:'https://images.wsdot.wa.gov/nw/167vc01900.jpg',  provider:'WSDOT' },
-  { id:'ws-014', name:'I-90 WB @ Issaquah',         city:'Issaquah',         state:'WA', lat:47.534,  lng:-122.038, rawImg:'https://images.wsdot.wa.gov/se/090vc00875.jpg',  provider:'WSDOT' },
-  { id:'ws-015', name:'SR-18 EB @ Auburn',          city:'Auburn',           state:'WA', lat:47.316,  lng:-122.125, rawImg:'https://images.wsdot.wa.gov/se/018vc01985.jpg',  provider:'WSDOT' },
-  { id:'ws-016', name:'US-97 NB @ Blewett Pass',   city:'Blewett Pass',     state:'WA', lat:47.598,  lng:-120.590, rawImg:'https://images.wsdot.wa.gov/nc/097vc14345.jpg',  provider:'WSDOT' },
-  { id:'ws-017', name:'SR-2 WB @ Leavenworth',     city:'Leavenworth',      state:'WA', lat:47.596,  lng:-120.662, rawImg:'https://images.wsdot.wa.gov/nc/002vc07055.jpg',  provider:'WSDOT' },
-  { id:'ws-018', name:'I-82 WB @ Ellensburg',      city:'Ellensburg',       state:'WA', lat:46.993,  lng:-120.549, rawImg:'https://images.wsdot.wa.gov/sc/082vc00340.jpg',  provider:'WSDOT' },
-  { id:'ws-019', name:'I-5 NB @ Burlington',       city:'Burlington',       state:'WA', lat:48.467,  lng:-122.336, rawImg:'https://images.wsdot.wa.gov/nw/005vc24530.jpg',  provider:'WSDOT' },
-  { id:'ws-020', name:'SR-512 EB @ Puyallup',      city:'Puyallup',         state:'WA', lat:47.186,  lng:-122.293, rawImg:'https://images.wsdot.wa.gov/nw/512vc00400.jpg',  provider:'WSDOT' },
-  // Oregon DOT (TripCheck — CORS-proxied)
-  { id:'or-001', name:'I-5 SB @ Wilsonville',      city:'Wilsonville',      state:'OR', lat:45.296,  lng:-122.772, rawImg:'https://tripcheck.com/roadcams/cams/Wilsonville%20-%20I5_pid2055.jpg', provider:'ODOT TripCheck' },
-  { id:'or-002', name:'US-20 WB @ Santiam Pass',   city:'Santiam Pass',     state:'OR', lat:44.417,  lng:-121.825, rawImg:'https://tripcheck.com/roadcams/cams/Santiam%20Pass%20-%20US20_pid1022.jpg', provider:'ODOT TripCheck' },
-  { id:'or-003', name:'I-84 EB @ Pendleton',       city:'Pendleton',        state:'OR', lat:45.672,  lng:-118.788, rawImg:'https://tripcheck.com/roadcams/cams/Pendleton%20-%20I84_pid4120.jpg', provider:'ODOT TripCheck' },
-  { id:'or-004', name:'US-101 NB @ Newport',       city:'Newport',          state:'OR', lat:44.637,  lng:-124.050, rawImg:'https://tripcheck.com/roadcams/cams/Newport%20-%20US101_pid3059.jpg', provider:'ODOT TripCheck' },
-  { id:'or-005', name:'I-5 NB @ Grant Pass',       city:'Grants Pass',      state:'OR', lat:42.441,  lng:-123.329, rawImg:'https://tripcheck.com/roadcams/cams/Grants%20Pass%20-%20I5_pid1032.jpg', provider:'ODOT TripCheck' },
-  // Wyoming DOT (wyoroad.info)
-  { id:'wy-001', name:'I-80 EB @ Laramie',         city:'Laramie',          state:'WY', lat:41.311,  lng:-105.591, rawImg:'https://www.wyoroad.info/webcams/webcams/I80_Laramie.jpg',  provider:'WYDOT' },
-  { id:'wy-002', name:'I-80 WB @ Cheyenne',        city:'Cheyenne',         state:'WY', lat:41.139,  lng:-104.820, rawImg:'https://www.wyoroad.info/webcams/webcams/I80_Cheyenne.jpg', provider:'WYDOT' },
-  { id:'wy-003', name:'US-14 @ Yellowstone',       city:'Cody',             state:'WY', lat:44.525,  lng:-109.056, rawImg:'https://www.wyoroad.info/webcams/webcams/US14_Cody.jpg',   provider:'WYDOT' },
-  { id:'wy-004', name:'I-25 NB @ Casper',          city:'Casper',           state:'WY', lat:42.866,  lng:-106.313, rawImg:'https://www.wyoroad.info/webcams/webcams/I25_Casper.jpg',  provider:'WYDOT' },
-  // Montana DOT
-  { id:'mt-001', name:'I-90 EB @ Missoula',        city:'Missoula',         state:'MT', lat:46.872,  lng:-114.017, rawImg:'https://mdt.mt.gov/travinfo/cameras/medium/cam_i90msl.jpg',    provider:'Montana DOT' },
-  { id:'mt-002', name:'I-90 WB @ Bozeman Pass',    city:'Bozeman',          state:'MT', lat:45.726,  lng:-110.958, rawImg:'https://mdt.mt.gov/travinfo/cameras/medium/cam_i90bozpass.jpg', provider:'Montana DOT' },
-  { id:'mt-003', name:'US-2 @ Marias Pass',        city:'Essex',            state:'MT', lat:48.313,  lng:-113.343, rawImg:'https://mdt.mt.gov/travinfo/cameras/medium/cam_us2mariaspass.jpg', provider:'Montana DOT' },
-  { id:'mt-004', name:'I-15 NB @ Great Falls',     city:'Great Falls',      state:'MT', lat:47.494,  lng:-111.300, rawImg:'https://mdt.mt.gov/travinfo/cameras/medium/cam_i15greatfalls.jpg', provider:'Montana DOT' },
-  // Colorado DOT (COTRIP)
-  { id:'co-001', name:'I-70 WB @ Vail Pass',       city:'Vail',             state:'CO', lat:39.558,  lng:-106.229, rawImg:'https://cotrip.org/fcd/getFeedData.do?type=cctv&id=COC-052-17615-001', provider:'CDOT' },
-  { id:'co-002', name:'I-25 NB @ Denver',          city:'Denver',           state:'CO', lat:39.697,  lng:-104.987, rawImg:'https://cotrip.org/speed/getJSONCurrentWeatherConditions.do', provider:'CDOT' },
-  // Minnesota DOT (511mn)
-  { id:'mn-001', name:'I-94 EB @ Minneapolis',     city:'Minneapolis',      state:'MN', lat:44.979,  lng:-93.267,  rawImg:'https://web.dot.state.mn.us/tmc/cctv/image?camera=168',     provider:'MnDOT' },
-  { id:'mn-002', name:'I-35W SB @ Burnsville',     city:'Burnsville',       state:'MN', lat:44.763,  lng:-93.279,  rawImg:'https://web.dot.state.mn.us/tmc/cctv/image?camera=201',     provider:'MnDOT' },
-  { id:'mn-003', name:'I-494 WB @ Bloomington',    city:'Bloomington',      state:'MN', lat:44.855,  lng:-93.396,  rawImg:'https://web.dot.state.mn.us/tmc/cctv/image?camera=341',     provider:'MnDOT' },
-  // Michigan DOT
-  { id:'mi-001', name:'I-75 NB @ Detroit',         city:'Detroit',          state:'MI', lat:42.322,  lng:-83.069,  rawImg:'https://mdotjpeg.com/giscams/SourceImages/CAM_SE_F_I75_0N01_R.jpg', provider:'MDOT' },
-  { id:'mi-002', name:'I-96 EB @ Grand Rapids',    city:'Grand Rapids',     state:'MI', lat:42.961,  lng:-85.669,  rawImg:'https://mdotjpeg.com/giscams/SourceImages/CAM_SW_F_I96_0N06_R.jpg', provider:'MDOT' },
-  // Nevada DOT
-  { id:'nv-001', name:'I-15 NB @ Las Vegas Blvd',  city:'Las Vegas',        state:'NV', lat:36.116,  lng:-115.173, rawImg:'https://nvroads.com/cameras/images/00I-015N__LAS-FASH.jpg',  provider:'NVDOT' },
-  { id:'nv-002', name:'US-50 WB @ Carson City',    city:'Carson City',      state:'NV', lat:39.164,  lng:-119.767, rawImg:'https://nvroads.com/cameras/images/00US-050E__CAR-STEW.jpg', provider:'NVDOT' },
-  // Texas DOT (DriveTexas)
-  { id:'tx-001', name:'I-35 NB @ Austin',          city:'Austin',           state:'TX', lat:30.267,  lng:-97.743,  rawImg:'https://its.txdot.gov/ITS_WEB/FeedService/CameraImage?cameraID=1014', provider:'TxDOT' },
-  { id:'tx-002', name:'I-10 WB @ Houston',         city:'Houston',          state:'TX', lat:29.757,  lng:-95.453,  rawImg:'https://its.txdot.gov/ITS_WEB/FeedService/CameraImage?cameraID=2042', provider:'TxDOT' },
-  { id:'tx-003', name:'I-20 EB @ Dallas',          city:'Dallas',           state:'TX', lat:32.780,  lng:-96.798,  rawImg:'https://its.txdot.gov/ITS_WEB/FeedService/CameraImage?cameraID=3078', provider:'TxDOT' },
-  // Idaho DOT
-  { id:'id-001', name:'I-84 EB @ Boise',           city:'Boise',            state:'ID', lat:43.615,  lng:-116.202, rawImg:'https://itickets.itd.idaho.gov/cgi-bin/img/CameraImage.aspx?id=1032', provider:'Idaho DOT' },
-  { id:'id-002', name:'US-95 NB @ Lewiston',       city:'Lewiston',         state:'ID', lat:46.416,  lng:-116.993, rawImg:'https://itickets.itd.idaho.gov/cgi-bin/img/CameraImage.aspx?id=2044', provider:'Idaho DOT' },
-];
-
-// ── Terminal logging ──────────────────────────────────────────────────────
-function tlog(msg, cls = 't-info') {
-  const body = document.getElementById('terminal-lines');
-  if (!body) return;
-  const ts = new Date().toLocaleTimeString('en-US', {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
-  const line = document.createElement('span');
-  line.className = `t-line ${cls}`;
-  line.textContent = `[${ts}] ${msg}`;
-  body.appendChild(line);
-  // Auto-scroll to bottom
-  body.parentElement.scrollTop = body.parentElement.scrollHeight;
-  // Trim old lines (keep 300)
-  while (body.children.length > 300) body.removeChild(body.firstChild);
+// ── HLS.js CDN (loaded dynamically) ──────────────────────────────────────
+let hlsJsLoaded = false;
+function loadHlsJs(cb) {
+  if (hlsJsLoaded || window.Hls) { cb(); return; }
+  const s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.8/hls.min.js';
+  s.onload = () => { hlsJsLoaded = true; cb(); };
+  document.head.appendChild(s);
 }
 
-function tlogDivider() {
-  const body = document.getElementById('terminal-lines');
-  if (!body) return;
-  const line = document.createElement('span');
-  line.className = 't-line t-dim';
-  line.textContent = '─'.repeat(42);
-  body.appendChild(line);
-  body.parentElement.scrollTop = body.parentElement.scrollHeight;
-}
-
-// ── Bot brain: pick an alert intelligently ────────────────────────────────
-function botPickAlert() {
-  const alerts = (alertsData.all || []).filter(a => isAlertVisible(a) && a._resolvedGeom);
-  if (!alerts.length) return null;
-
-  tlog('BRAIN: Scanning ' + alerts.length + ' active alerts...', 't-brain');
-
-  // Score each alert
-  const scored = alerts.map(a => {
-    const sig = a.properties?.vtec?.significance || '';
-    const sev = getSeverity(sig, a.event);
-    let score = BOT.WEIGHTS[a.event] || BOT.WEIGHTS['__' + sev] || 5;
-
-    // Recency boost: newer alerts score higher
-    const sentAge = a.sent ? (Date.now() - new Date(a.sent).getTime()) / 60000 : 999;
-    if (sentAge < 10) score += 30;
-    else if (sentAge < 30) score += 15;
-    else if (sentAge < 60) score += 5;
-
-    // Avoid immediately repeating last alert
-    if (a.id === BOT.lastAlertId) score *= 0.1;
-
-    // Add jitter so it's not deterministic
-    score *= (0.7 + Math.random() * 0.6);
-
-    tlog(`BRAIN: [${score.toFixed(1)}] ${a.event} — ${(a.areaDesc||'').substring(0,35)}`, 't-brain');
-    return { alert: a, score };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  const chosen = scored[0]?.alert || null;
-
-  if (chosen) {
-    tlog(`BRAIN: Selected → ${chosen.event}`, 't-brain');
-  } else {
-    tlog('BRAIN: No suitable alert found.', 't-brain');
-  }
-  return chosen;
-}
-
-// ── TTS ───────────────────────────────────────────────────────────────────
-function botSpeak(text, onEnd) {
-  if (!BOT.ttsEnabled || !window.speechSynthesis) { onEnd && onEnd(); return; }
-  window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.rate  = 0.92;
-  utt.pitch = 0.85;
-  utt.volume = 1.0;
-
-  // Try to pick a deep/authoritative voice
-  const voices = window.speechSynthesis.getVoices();
-  const preferred = voices.find(v =>
-    /david|mark|alex|google us|microsoft david|zira/i.test(v.name)
-  ) || voices.find(v => v.lang === 'en-US') || voices[0];
-  if (preferred) utt.voice = preferred;
-
-  utt.onstart = () => {
-    setBotStatus('speaking');
-    tlog('SPEAK: ' + text.substring(0, 80) + (text.length > 80 ? '...' : ''), 't-speak');
-  };
-  utt.onend = () => { onEnd && onEnd(); };
-  utt.onerror = () => { onEnd && onEnd(); };
-  BOT.currentUtterance = utt;
-  window.speechSynthesis.speak(utt);
-}
-
-// ── Build spoken script for an alert ─────────────────────────────────────
-function buildBotScript(alert) {
-  const info = alert.alertinfo || {};
-  const evt  = alert.event || 'Alert';
-  const area = (alert.areaDesc || '').split(';')[0].trim();
-  const sig  = alert.properties?.vtec?.significance || '';
-  const sev  = getSeverity(sig, evt);
-
-  const intros = [
-    `Attention. The National Weather Service has issued a ${evt}.`,
-    `This is an automated weather alert. A ${evt} is in effect.`,
-    `Weather alert. ${evt} issued by the National Weather Service.`,
-    `Priority weather notification. ${evt} now in effect.`,
-  ];
-  const intro = intros[Math.floor(Math.random() * intros.length)];
-
-  let script = intro + ' ';
-  if (area) script += `Affected area: ${area}. `;
-  if (info.WHAT) script += `${info.WHAT} `;
-  if (info.WHEN) script += `This is in effect ${info.WHEN} `;
-  if (info.IMPACTS) script += `Impacts: ${info.IMPACTS} `;
-
-  const outros = [
-    'Please take appropriate precautions.',
-    'Stay weather aware and follow guidance from local authorities.',
-    'Monitor official NWS channels for updates.',
-    'Take action now to protect life and property.',
-  ];
-  script += outros[Math.floor(Math.random() * outros.length)];
-
-  return script;
-}
-
-// ── Map zoom ──────────────────────────────────────────────────────────────
-function botZoomToAlert(alert) {
-  clearBotHighlight();
-  const geom  = alert._resolvedGeom;
-  const color = alertColor(alert);
-  if (!geom) return;
-  try {
-    const layer = L.geoJSON({ type:'Feature', geometry:geom }, {
-      style: { color, weight:3, fillColor:color, fillOpacity:0.22, opacity:1 }
-    }).addTo(map);
-    BOT.highlightLayer = layer;
-    map.fitBounds(layer.getBounds(), { padding:[60,60], maxZoom:10 });
-  } catch(e) {}
-}
-
-function botReturnHome() {
-  clearBotHighlight();
-  map.flyTo([39.5, -98.35], 5, { duration: 2.5, easing: t => t < 0.5 ? 2*t*t : -1+(4-2*t)*t });
-  tlog('MAP: Returning to national overview.', 't-sys');
-}
-
-function clearBotHighlight() {
-  if (BOT.highlightLayer) { map.removeLayer(BOT.highlightLayer); BOT.highlightLayer = null; }
-}
-
-// ── Status helpers ────────────────────────────────────────────────────────
-function setBotStatus(s) {
-  const dot   = document.getElementById('bot-status-dot');
-  const label = document.getElementById('bot-mode-label');
-  dot.className = 'online';
-  if (s === 'thinking') { dot.className = 'thinking'; label.textContent = 'BOT: THINKING'; }
-  else if (s === 'speaking') { dot.className = 'speaking'; label.textContent = 'BOT: SPEAKING'; }
-  else if (s === 'scanning') { dot.className = 'online'; label.textContent = 'BOT: SCANNING'; }
-  else if (s === 'idle')    { dot.className = 'online'; label.textContent = 'BOT: IDLE'; }
-  else if (s === 'zooming') { dot.className = 'online'; label.textContent = 'BOT: ON MAP'; }
-  else { dot.className = ''; label.textContent = 'BOT OFFLINE'; }
-}
-
-function updateBotHUD(alert) {
-  if (!alert) {
-    document.getElementById('bot-alert-badge').textContent = '';
-    document.getElementById('bot-alert-name').textContent  = '';
-    document.getElementById('bot-alert-area').textContent  = '';
-    return;
-  }
-  const sig   = alert.properties?.vtec?.significance || '';
-  const color = alertColor(alert);
-  const badge = document.getElementById('bot-alert-badge');
-  badge.textContent   = (alert.event || 'Alert').toUpperCase();
-  badge.style.color   = color;
-  badge.style.borderColor = color;
-  document.getElementById('bot-alert-name').textContent = alert.event || '';
-  document.getElementById('bot-alert-name').style.color = color;
-  document.getElementById('bot-alert-area').textContent = (alert.areaDesc || '').substring(0,60);
-}
-
-// Animated thinking bar
-function animateThinkBar(label, durationMs, onDone) {
-  clearInterval(BOT.thinkTimer);
-  thinkFill = 0;
-  const fill  = document.getElementById('bot-thinking-fill');
-  const lbl   = document.getElementById('bot-thinking-label');
-  lbl.textContent = label;
-  fill.style.width = '0%';
-  const step = 100 / (durationMs / 80);
-  BOT.thinkTimer = setInterval(() => {
-    thinkFill = Math.min(100, thinkFill + step);
-    fill.style.width = thinkFill + '%';
-    if (thinkFill >= 100) {
-      clearInterval(BOT.thinkTimer);
-      if (onDone) onDone();
-    }
-  }, 80);
-}
-
-// ── Main bot cycle ────────────────────────────────────────────────────────
-function botCycle() {
-  if (!BOT.active) return;
-  BOT.cycleCount++;
-
-  tlogDivider();
-  tlog(`SYS: Cycle #${BOT.cycleCount} — bot awake.`, 't-sys');
-  setBotStatus('scanning');
-  animateThinkBar('SCANNING', 1200, () => {
-    setBotStatus('thinking');
-    animateThinkBar('THINKING', 1800, () => {
-
-      // Should bot speak this cycle?
-      const roll = Math.random();
-      tlog(`BRAIN: Activity roll ${roll.toFixed(3)} vs threshold ${BOT.SPEAK_PROBABILITY}`, 't-brain');
-
-      if (roll > BOT.SPEAK_PROBABILITY) {
-        tlog('BRAIN: Bot decided to stay silent this cycle.', 't-brain');
-        setBotStatus('idle');
-        animateThinkBar('IDLE', 500);
-        scheduleBotCycle();
-        return;
-      }
-
-      const alert = botPickAlert();
-      if (!alert) {
-        tlog('SYS: No alerts with geometry. Staying idle.', 't-sys');
-        setBotStatus('idle');
-        animateThinkBar('IDLE', 500);
-        scheduleBotCycle();
-        return;
-      }
-
-      BOT.lastAlertId = alert.id;
-      updateBotHUD(alert);
-
-      // Log alert details to terminal
-      tlogDivider();
-      tlog(`ALERT: ${alert.event}`, 't-alert');
-      tlog(`AREA:  ${alert.areaDesc || '—'}`, 't-alert');
-      const info = alert.alertinfo || {};
-      if (info.WHAT)    tlog(`WHAT:  ${info.WHAT}`, 't-alert');
-      if (info.WHEN)    tlog(`WHEN:  ${info.WHEN}`, 't-alert');
-      if (info.IMPACTS) tlog(`IMPS:  ${info.IMPACTS}`, 't-alert');
-      const exp = alert.expires ? new Date(alert.expires).toLocaleString() : '—';
-      tlog(`EXP:   ${exp}`, 't-alert');
-      tlogDivider();
-
-      setBotStatus('zooming');
-      animateThinkBar('ZOOMING', 2000);
-      botZoomToAlert(alert);
-
-      const script = buildBotScript(alert);
-      tlog('BRAIN: Script generated (' + script.length + ' chars)', 't-brain');
-
-      // Small delay then speak
-      setTimeout(() => {
-        animateThinkBar('SPEAKING', script.length * 55);
-        botSpeak(script, () => {
-          tlog('SPEAK: TTS complete.', 't-speak');
-          setBotStatus('idle');
-          animateThinkBar('RETURNING', 2800, () => {
-            botReturnHome();
-            updateBotHUD(null);
-            scheduleBotCycle();
-          });
-        });
-      }, 2200);
-    });
-  });
-}
-
-function scheduleBotCycle() {
-  clearTimeout(BOT.scanTimer);
-  if (!BOT.active) return;
-  const delay = BOT.SCAN_INTERVAL_MIN + Math.random() * (BOT.SCAN_INTERVAL_MAX - BOT.SCAN_INTERVAL_MIN);
-  tlog(`SYS: Next scan in ${(delay/1000).toFixed(0)}s`, 't-sys');
-  animateThinkBar('IDLE', delay);
-  document.getElementById('bot-thinking-label').textContent = 'IDLE';
-  setBotStatus('idle');
-  BOT.scanTimer = setTimeout(botCycle, delay);
-}
-
-// ── Bot start/stop ────────────────────────────────────────────────────────
-function startBot() {
-  BOT.active     = true;
-  BOT.cycleCount = 0;
-  document.getElementById('bot-terminal').classList.remove('hidden');
-  document.getElementById('btn-bot').classList.add('active');
-  document.getElementById('bot-status-dot').className = 'online';
-  tlog('═══════════════════════════════════════', 't-dim');
-  tlog('SYS: NWS RADAR BOT v1.0 — ONLINE', 't-sys');
-  tlog('SYS: TTS ' + (BOT.ttsEnabled ? 'ENABLED' : 'DISABLED'), 't-sys');
-  tlog('SYS: Scan interval ' + (BOT.SCAN_INTERVAL_MIN/1000).toFixed(0) + '–' + (BOT.SCAN_INTERVAL_MAX/1000).toFixed(0) + 's', 't-sys');
-  tlog('SYS: Alert bias probability ' + (BOT.SPEAK_PROBABILITY*100).toFixed(0) + '%', 't-sys');
-  tlog('═══════════════════════════════════════', 't-dim');
-
-  // Kick off first cycle after short boot delay
-  setTimeout(botCycle, 1500);
-}
-
-function stopBot() {
-  BOT.active = false;
-  clearTimeout(BOT.scanTimer);
-  clearTimeout(BOT.dwellTimer);
-  clearInterval(BOT.thinkTimer);
-  if (BOT.currentUtterance) window.speechSynthesis.cancel();
-  clearBotHighlight();
-  botReturnHome();
-  document.getElementById('btn-bot').classList.remove('active');
-  setBotStatus('offline');
-  tlog('SYS: Bot shutting down.', 't-sys');
-  document.getElementById('bot-thinking-label').textContent = 'IDLE';
-  document.getElementById('bot-thinking-fill').style.width = '0%';
-  updateBotHUD(null);
-}
-
-// ── Controls ──────────────────────────────────────────────────────────────
-document.getElementById('btn-bot').addEventListener('click', () => {
-  if (BOT.active) stopBot(); else startBot();
-});
-
-document.getElementById('btn-bot-close').addEventListener('click', () => {
-  stopBot();
-  document.getElementById('bot-terminal').classList.add('hidden');
-});
-
-document.getElementById('btn-tts-toggle').addEventListener('click', function() {
-  BOT.ttsEnabled = !BOT.ttsEnabled;
-  this.classList.toggle('muted', !BOT.ttsEnabled);
-  this.textContent = BOT.ttsEnabled ? '🔊' : '🔇';
-  tlog('SYS: TTS ' + (BOT.ttsEnabled ? 'enabled' : 'muted'), 't-sys');
-  if (!BOT.ttsEnabled && window.speechSynthesis) window.speechSynthesis.cancel();
-});
-
-
-// =============================================
-//  TRAFFIC CAMERA SYSTEM
-// =============================================
-
-// Public traffic camera feeds — multiple open DOT/511 sources
-// These use publicly available state DOT image endpoints that don't need auth
-const CAM_SOURCES = [
-  // Virginia DOT 511 (VDOT) — public JSON feed
-  { id: 'vdot', label: 'Virginia DOT', url: 'https://www.511va.org/api/get/cameras', parser: parseFeedVDOT },
-  // Washington State DOT — public WSDOT cameras
-  { id: 'wsdot', label: 'Washington DOT', url: 'https://wsdot.wa.gov/traffic/api/Cameras/CameraAPI.svc/GetCameras?AccessCode=wsdot', parser: parseFeedWSDOT },
-  // Florida DOT (FL511) — public
-  { id: 'fl511', label: 'Florida 511', url: 'https://fl511.com/api/get/cameras', parser: parseFeedFL511 },
-];
-
-// Fallback: use a curated set of publicly-accessible DOT camera images
-// from state open data portals. These are real JPEG snapshots.
-const FALLBACK_CAMERAS = [
-  // WSDOT public cameras (no auth required, official open data)
-  { id:'wsdot-001', name:'I-5 @ Seattle — Northgate', city:'Seattle', state:'WA', lat:47.706, lng:-122.328, img:'https://images.wsdot.wa.gov/nw/005vc00920.jpg', provider:'WSDOT' },
-  { id:'wsdot-002', name:'I-90 @ Snoqualmie Pass', city:'Snoqualmie Pass', state:'WA', lat:47.425, lng:-121.413, img:'https://images.wsdot.wa.gov/se/090vc16195.jpg', provider:'WSDOT' },
-  { id:'wsdot-003', name:'SR-520 @ Montlake', city:'Seattle', state:'WA', lat:47.643, lng:-122.305, img:'https://images.wsdot.wa.gov/nw/520vc00315.jpg', provider:'WSDOT' },
-  { id:'wsdot-004', name:'I-5 @ Tacoma — Portland Ave', city:'Tacoma', state:'WA', lat:47.254, lng:-122.430, img:'https://images.wsdot.wa.gov/nw/005vc05500.jpg', provider:'WSDOT' },
-  { id:'wsdot-005', name:'US-2 @ Stevens Pass', city:'Stevens Pass', state:'WA', lat:47.745, lng:-121.090, img:'https://images.wsdot.wa.gov/nc/002vc06465.jpg', provider:'WSDOT' },
-  { id:'wsdot-006', name:'I-405 @ Renton', city:'Renton', state:'WA', lat:47.480, lng:-122.194, img:'https://images.wsdot.wa.gov/nw/405vc01980.jpg', provider:'WSDOT' },
-  { id:'wsdot-007', name:'SR-99 @ Aurora', city:'Seattle', state:'WA', lat:47.660, lng:-122.348, img:'https://images.wsdot.wa.gov/nw/099vc00930.jpg', provider:'WSDOT' },
-  { id:'wsdot-008', name:'I-82 @ Yakima', city:'Yakima', state:'WA', lat:46.600, lng:-120.506, img:'https://images.wsdot.wa.gov/sc/082vc03360.jpg', provider:'WSDOT' },
-  { id:'wsdot-009', name:'SR-2 @ Monroe', city:'Monroe', state:'WA', lat:47.856, lng:-121.970, img:'https://images.wsdot.wa.gov/nc/002vc04290.jpg', provider:'WSDOT' },
-  { id:'wsdot-010', name:'I-5 @ Bellingham', city:'Bellingham', state:'WA', lat:48.740, lng:-122.480, img:'https://images.wsdot.wa.gov/nw/005vc25530.jpg', provider:'WSDOT' },
-  { id:'wsdot-011', name:'SR-14 @ White Salmon', city:'White Salmon', state:'WA', lat:45.726, lng:-121.490, img:'https://images.wsdot.wa.gov/sc/014vc06285.jpg', provider:'WSDOT' },
-  { id:'wsdot-012', name:'US-12 @ White Pass', city:'White Pass', state:'WA', lat:46.638, lng:-121.398, img:'https://images.wsdot.wa.gov/sc/012vc14980.jpg', provider:'WSDOT' },
-  // Oregon DOT (ODOT) open cameras
-  { id:'odot-001', name:'I-5 @ Portland — Barbur Blvd', city:'Portland', state:'OR', lat:45.482, lng:-122.682, img:'https://tripcheck.com/roadcams/cams/Barbur%20Blvd%20at%20I-5_pid3877.jpg', provider:'ODOT TripCheck' },
-  { id:'odot-002', name:'I-84 @ Cascade Locks', city:'Cascade Locks', state:'OR', lat:45.669, lng:-121.896, img:'https://tripcheck.com/roadcams/cams/Cascade%20Locks%20-%20I-84_pid1250.jpg', provider:'ODOT TripCheck' },
-  { id:'odot-003', name:'US-26 @ Timberline', city:'Government Camp', state:'OR', lat:45.298, lng:-121.770, img:'https://tripcheck.com/roadcams/cams/US-26%20at%20Timberline%20Jct_pid2021.jpg', provider:'ODOT TripCheck' },
-  { id:'odot-004', name:'I-5 @ Medford', city:'Medford', state:'OR', lat:42.335, lng:-122.870, img:'https://tripcheck.com/roadcams/cams/Medford%20-%20I-5%20at%20Barnett_pid4019.jpg', provider:'ODOT TripCheck' },
-  // Nevada DOT (FAST) — public cams
-  { id:'nvdot-001', name:'I-15 @ Las Vegas — Flamingo', city:'Las Vegas', state:'NV', lat:36.116, lng:-115.173, img:'https://nvroads.com/cameras/images/I-15_Flamingo.jpg', provider:'Nevada DOT' },
-  { id:'nvdot-002', name:'US-395 @ Carson City', city:'Carson City', state:'NV', lat:39.164, lng:-119.767, img:'https://nvroads.com/cameras/images/US-395_Carson.jpg', provider:'Nevada DOT' },
-  // Wyoming DOT
-  { id:'wydot-001', name:'I-80 @ Laramie', city:'Laramie', state:'WY', lat:41.311, lng:-105.591, img:'https://wyoroad.info/webcams/I80Laramie.jpg', provider:'WYDOT' },
-  { id:'wydot-002', name:'I-25 @ Cheyenne', city:'Cheyenne', state:'WY', lat:41.139, lng:-104.820, img:'https://wyoroad.info/webcams/I25Cheyenne.jpg', provider:'WYDOT' },
-  // Montana DOT
-  { id:'mtdot-001', name:'I-90 @ Missoula', city:'Missoula', state:'MT', lat:46.872, lng:-114.017, img:'https://mdt.mt.gov/travinfo/cameras/large/i90_missoula.jpg', provider:'Montana DOT' },
-  { id:'mtdot-002', name:'US-2 @ Havre', city:'Havre', state:'MT', lat:48.550, lng:-109.680, img:'https://mdt.mt.gov/travinfo/cameras/large/us2_havre.jpg', provider:'Montana DOT' },
-  // Idaho DOT
-  { id:'idaho-001', name:'I-84 @ Boise', city:'Boise', state:'ID', lat:43.615, lng:-116.202, img:'https://itickets.itd.idaho.gov/cameras/boise_i84.jpg', provider:'Idaho DOT' },
-  // Colorado DOT
-  { id:'cdot-001', name:'I-70 @ Vail Pass', city:'Vail', state:'CO', lat:39.558, lng:-106.229, img:'https://cotrip.org/images/cameras/VailPass_I70.jpg', provider:'CDOT' },
-  { id:'cdot-002', name:'I-25 @ Denver — Broadway', city:'Denver', state:'CO', lat:39.697, lng:-104.987, img:'https://cotrip.org/images/cameras/I25_Denver_Broadway.jpg', provider:'CDOT' },
-  // Utah DOT
-  { id:'utdot-001', name:'I-15 @ Salt Lake City', city:'Salt Lake City', state:'UT', lat:40.761, lng:-111.891, img:'https://udottraffic.utah.gov/images/cameras/I15SLC.jpg', provider:'UDOT' },
-  // Minnesota DOT
-  { id:'mndot-001', name:'I-94 @ Minneapolis', city:'Minneapolis', state:'MN', lat:44.979, lng:-93.267, img:'https://511mn.org/cameras/I94MPLS.jpg', provider:'MnDOT' },
-  // Michigan DOT
-  { id:'midot-001', name:'I-75 @ Detroit — Ambassador Bridge', city:'Detroit', state:'MI', lat:42.322, lng:-83.069, img:'https://mdotjpeg.com/giscams/SourceImages/CAM_US_F_I75_I96_BOR01.jpg', provider:'MDOT' },
-  { id:'midot-002', name:'I-96 @ Lansing', city:'Lansing', state:'MI', lat:42.737, lng:-84.555, img:'https://mdotjpeg.com/giscams/SourceImages/CAM_US_F_I96_LAN01.jpg', provider:'MDOT' },
-  // Pennsylvania DOT
-  { id:'padot-001', name:'I-76 PA Turnpike @ Plymouth Meeting', city:'Plymouth Meeting', state:'PA', lat:40.103, lng:-75.277, img:'https://www.511pa.com/cameras/camera_images/I76_PM.jpg', provider:'PennDOT' },
-  // Illinois DOT
-  { id:'ildot-001', name:'I-90/94 @ Chicago — Dan Ryan', city:'Chicago', state:'IL', lat:41.850, lng:-87.627, img:'https://traveler.idot.illinois.gov/cameras/I90_Chicago.jpg', provider:'IDOT' },
-  // Texas DOT
-  { id:'txdot-001', name:'I-35 @ Austin', city:'Austin', state:'TX', lat:30.267, lng:-97.743, img:'https://www.drivetexas.org/images/cameras/I35_Austin.jpg', provider:'TxDOT' },
-  { id:'txdot-002', name:'I-10 @ Houston — Katy Freeway', city:'Houston', state:'TX', lat:29.757, lng:-95.453, img:'https://www.drivetexas.org/images/cameras/I10_Houston_Katy.jpg', provider:'TxDOT' },
-  // Florida DOT (SunGuide)
-  { id:'fldot-001', name:'I-4 @ Orlando', city:'Orlando', state:'FL', lat:28.549, lng:-81.390, img:'https://fl511.com/cameras/I4_Orlando.jpg', provider:'FDOT SunGuide' },
-  { id:'fldot-002', name:'I-95 @ Miami', city:'Miami', state:'FL', lat:25.774, lng:-80.197, img:'https://fl511.com/cameras/I95_Miami.jpg', provider:'FDOT SunGuide' },
-  // Georgia DOT
-  { id:'gadot-001', name:'I-285 @ Atlanta — I-20 West', city:'Atlanta', state:'GA', lat:33.748, lng:-84.410, img:'https://www.511ga.org/cameras/I285_Atlanta.jpg', provider:'Georgia DOT' },
-];
-
-// Camera state
+// ── Camera state ──────────────────────────────────────────────────────────
 const CAM = {
-  active: false,
-  cameras: [],          // loaded camera objects
-  filteredCams: [],     // after state filter
-  knownIds: new Set(),  // for "new camera" detection
-  refreshTimer: null,
-  mapMarkers: L.layerGroup(),
-  viewMode: 'grid',     // 'grid' | 'map'
+  active:      false,
+  cameras:     TRAFFIC_CAMERAS,
+  filteredCams:[],
+  knownIds:    new Set(),
+  scanTimer:   null,
+  mapMarkers:  L.layerGroup(),
+  viewMode:    'grid',
   lightboxIdx: -1,
+  activeHls:   [],   // track Hls instances to destroy on close
   termCollapsed: false,
 };
 
-// ── Terminal logging ──────────────────────────────────────────────────────
+// ── Terminal ──────────────────────────────────────────────────────────────
 function ctlog(msg, cls = 'ct-info') {
   const lines = document.getElementById('cam-term-lines');
   if (!lines) return;
@@ -3601,10 +3137,9 @@ function ctlog(msg, cls = 'ct-info') {
   el.className = `ct-line ${cls}`;
   el.textContent = `[${ts}] ${msg}`;
   lines.appendChild(el);
-  while (lines.children.length > 200) lines.removeChild(lines.firstChild);
+  while (lines.children.length > 300) lines.removeChild(lines.firstChild);
   lines.parentElement.scrollTop = lines.parentElement.scrollHeight;
 }
-
 function ctDivider() {
   const lines = document.getElementById('cam-term-lines');
   if (!lines) return;
@@ -3615,76 +3150,27 @@ function ctDivider() {
   lines.parentElement.scrollTop = lines.parentElement.scrollHeight;
 }
 
-// ── Parser stubs for live APIs (graceful-fail to fallback) ────────────────
-function parseFeedVDOT(data) { return []; }
-function parseFeedWSDOT(data) { return []; }
-function parseFeedFL511(data) { return []; }
-
-// ── Load cameras ──────────────────────────────────────────────────────────
-async function loadCameras() {
-  setCamStatus('loading');
-  ctDivider();
-  ctlog('SYS: Initializing traffic camera feed...', 'ct-sys');
-  ctlog(`SYS: Routing all images through CORS proxy...`, 'ct-sys');
-
-  // Start with seed cameras, proxying all images
-  const cams = SEED_CAMERAS.map(c => ({
-    ...c,
-    img: proxied(c.rawImg),
-    quality: Math.floor(Math.random() * 3) + 8,
-    disabled: false,
-    refreshRate: 30000,
-  }));
-
-  ctlog(`SYS: Seeded ${cams.length} cameras from DOT sources.`, 'ct-sys');
-
-  // Try live UDOT open API (no key, returns CORS headers)
-  for (const feed of LIVE_FEEDS) {
-    try {
-      ctlog(`LIVE: Fetching ${feed.label}...`, 'ct-sys');
-      const r = await fetch(PROXY + encodeURIComponent(feed.url), {
-        signal: AbortSignal.timeout(5000)
-      });
-      if (!r.ok) throw new Error(r.status);
-      const raw  = await r.text();
-      const json = JSON.parse(raw.replace(/^[^[{]*/, '').replace(/[^}\]]*$/, '') || '[]');
-      const parsed = feed.parse(json).filter(c =>
-        c.rawImg && c.lat && !isNaN(c.lat) && c.lng && !isNaN(c.lng)
-      );
-      if (parsed.length) {
-        parsed.forEach(c => { c.img = proxied(c.rawImg); c.disabled = false; c.refreshRate = 30000; });
-        // Merge, avoid duplicates
-        const existingIds = new Set(cams.map(c => c.id));
-        const fresh = parsed.filter(c => !existingIds.has(c.id));
-        cams.push(...fresh);
-        ctlog(`LIVE: +${fresh.length} cameras from ${feed.label}.`, 'ct-new');
-      }
-    } catch(e) {
-      ctlog(`SYS: ${feed.label} feed unavailable (${e.message||'timeout'}).`, 'ct-sys');
-    }
+// ── Attach HLS stream to a <video> element ────────────────────────────────
+function attachStream(videoEl, streamUrl, camId) {
+  if (window.Hls && window.Hls.isSupported()) {
+    const hls = new window.Hls({ maxBufferLength: 4, maxMaxBufferLength: 8 });
+    hls.loadSource(streamUrl);
+    hls.attachMedia(videoEl);
+    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+      videoEl.play().catch(()=>{});
+      ctlog(`LIVE: Stream started — ${camId}`, 'ct-new');
+    });
+    hls.on(window.Hls.Events.ERROR, (e, data) => {
+      if (data.fatal) ctlog(`ERR: Stream failed — ${camId}`, 'ct-err');
+    });
+    CAM.activeHls.push(hls);
+    return hls;
+  } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari native HLS
+    videoEl.src = streamUrl;
+    videoEl.play().catch(()=>{});
+    ctlog(`LIVE: Native HLS — ${camId}`, 'ct-new');
   }
-
-  // Detect new cameras vs previous load
-  let newCount = 0;
-  cams.forEach(c => {
-    if (!CAM.knownIds.has(c.id)) {
-      CAM.knownIds.add(c.id);
-      c._isNew = true;
-      newCount++;
-    } else {
-      c._isNew = false;
-    }
-  });
-
-  CAM.cameras = cams;
-  applyStateFilter();
-
-  ctlog(`FEED: ${cams.length} total cameras. ${newCount} new this session.`, 'ct-info');
-  ctDivider();
-  setCamStatus('live');
-  populateStateDropdown();
-  renderCameraGrid();
-  renderCameraMapPins();
 }
 
 // ── Populate state dropdown ───────────────────────────────────────────────
@@ -3700,50 +3186,65 @@ function applyStateFilter() {
   CAM.filteredCams = val ? CAM.cameras.filter(c => c.state === val) : [...CAM.cameras];
 }
 
-// ── Render camera grid ────────────────────────────────────────────────────
+// ── Render grid ───────────────────────────────────────────────────────────
 function renderCameraGrid() {
   const grid = document.getElementById('cam-grid');
   if (!grid) return;
-
   document.getElementById('cam-count-badge').textContent = CAM.filteredCams.length;
 
-  grid.innerHTML = CAM.filteredCams.map((c, idx) => {
-    const qualClass = c.quality >= 8 ? 'cam-q-good' : c.quality >= 5 ? 'cam-q-fair' : 'cam-q-poor';
-    const qualLabel = c.quality >= 8 ? 'LIVE' : c.quality >= 5 ? 'FAIR' : 'POOR';
-    return `<div class="cam-card${c._isNew ? ' cam-new' : ''}" data-idx="${idx}" data-id="${c.id}">
-      <img src="${c.img}" alt="${c.name}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'220\\' height=\\'130\\'><rect fill=\\'%23060a10\\' width=\\'220\\' height=\\'130\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%231a2535\\' text-anchor=\\'middle\\' dominant-baseline=\\'middle\\' font-size=\\'11\\'>NO SIGNAL</text></svg>'">
-      <div class="cam-card-quality ${qualClass}">${qualLabel}</div>
-      ${c._isNew ? '<div class="cam-new-badge">NEW</div>' : ''}
-      ${c.disabled ? '<div class="cam-disabled-overlay">DISABLED</div>' : ''}
+  // Destroy any existing HLS instances
+  CAM.activeHls.forEach(h => { try { h.destroy(); } catch(e){} });
+  CAM.activeHls = [];
+
+  grid.innerHTML = CAM.filteredCams.map((c, idx) => `
+    <div class="cam-card${c._isNew ? ' cam-new' : ''}" data-idx="${idx}" data-id="${c.id}">
+      <div class="cam-video-wrap">
+        <video class="cam-thumb-video" data-stream="${c.stream}" data-id="${c.id}"
+               autoplay muted playsinline loop
+               poster="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='130'><rect fill='%23060a10' width='220' height='130'/><text x='50%25' y='45%25' fill='%231a2535' text-anchor='middle' font-size='11' font-family='monospace'>CONNECTING...</text><text x='50%25' y='62%25' fill='%230a1a2a' text-anchor='middle' font-size='9' font-family='monospace'>${c.id}</text></svg>">
+        </video>
+        <div class="cam-card-quality cam-q-live">LIVE</div>
+        ${c._isNew ? '<div class="cam-new-badge">NEW</div>' : ''}
+        <div class="cam-play-overlay">▶</div>
+      </div>
       <div class="cam-card-info">
         <div class="cam-card-name">${c.name}</div>
-        <div class="cam-card-loc">${c.city || ''}, ${c.state || ''} — ${c.provider || ''}</div>
+        <div class="cam-card-loc">${c.city}, ${c.state} — ${c.provider}</div>
       </div>
-    </div>`;
-  }).join('');
+    </div>`).join('');
 
+  // Attach HLS streams to all thumb videos after hls.js loaded
+  loadHlsJs(() => {
+    grid.querySelectorAll('.cam-thumb-video').forEach(vid => {
+      attachStream(vid, vid.dataset.stream, vid.dataset.id);
+    });
+  });
+
+  // Click → lightbox
   grid.querySelectorAll('.cam-card').forEach(card => {
     card.addEventListener('click', () => openLightbox(parseInt(card.dataset.idx)));
   });
 }
 
-// ── Render map pins ───────────────────────────────────────────────────────
+// ── Map pins ──────────────────────────────────────────────────────────────
 function renderCameraMapPins() {
   CAM.mapMarkers.clearLayers();
   CAM.filteredCams.forEach((c, idx) => {
     if (!c.lat || !c.lng) return;
     const icon = L.divIcon({
       html: `<div class="cam-map-marker" title="${c.name}"></div>`,
-      className: '', iconSize: [10,10], iconAnchor: [5,5]
+      className: '', iconSize:[10,10], iconAnchor:[5,5]
     });
-    const m = L.marker([c.lat, c.lng], { icon });
+    const m = L.marker([c.lat, c.lng], {icon});
     m.on('click', () => openLightbox(idx));
-    m.bindTooltip(`<b>${c.name}</b><br>${c.city}, ${c.state}`, { className: '' });
+    m.bindTooltip(`<b>${c.name}</b><br>${c.city}, ${c.state}`, {});
     CAM.mapMarkers.addLayer(m);
   });
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────
+let lightboxHls = null;
+
 function openLightbox(idx) {
   const c = CAM.filteredCams[idx];
   if (!c) return;
@@ -3751,20 +3252,165 @@ function openLightbox(idx) {
 
   document.getElementById('cam-lightbox').classList.remove('cam-hidden');
   document.getElementById('cam-lightbox-title').textContent = c.name;
-  document.getElementById('cam-lightbox-img').src = proxied(c.rawImg || c.img.split('?')[0]) + '&_=' + Date.now();
   document.getElementById('cam-lightbox-info').textContent =
-    `${c.city || ''}, ${c.state || ''}  |  Provider: ${c.provider || '—'}  |  Quality: ${c.quality}/10`;
+    `${c.city}, ${c.state}  |  ${c.provider}  |  HLS Live Stream`;
   document.getElementById('cam-lightbox-counter').textContent =
-    `${idx + 1} / ${CAM.filteredCams.length}`;
+    `${idx+1} / ${CAM.filteredCams.length}`;
+
+  // Swap static img for video in lightbox
+  const container = document.getElementById('cam-lightbox-img').parentElement;
+  let vid = document.getElementById('cam-lightbox-video');
+  if (!vid) {
+    document.getElementById('cam-lightbox-img').style.display = 'none';
+    vid = document.createElement('video');
+    vid.id = 'cam-lightbox-video';
+    vid.autoplay = true;
+    vid.muted = true;
+    vid.controls = true;
+    vid.playsInline = true;
+    vid.style.cssText = 'width:100%;max-height:500px;display:block;background:#020508';
+    container.insertBefore(vid, document.getElementById('cam-lightbox-img'));
+  }
+  // Destroy previous HLS
+  if (lightboxHls) { try { lightboxHls.destroy(); } catch(e){} lightboxHls = null; }
+  vid.src = '';
+
+  loadHlsJs(() => {
+    lightboxHls = attachStream(vid, c.stream, c.id);
+  });
 
   ctlog(`VIEW: Opened camera ${idx+1}: ${c.name}`, 'ct-info');
 }
 
 function closeLightbox() {
   document.getElementById('cam-lightbox').classList.add('cam-hidden');
+  if (lightboxHls) { try { lightboxHls.destroy(); } catch(e){} lightboxHls = null; }
+  const vid = document.getElementById('cam-lightbox-video');
+  if (vid) { vid.pause(); vid.src = ''; }
   CAM.lightboxIdx = -1;
 }
 
+// ── Load cameras ──────────────────────────────────────────────────────────
+async function loadCameras() {
+  setCamStatus('loading');
+  ctDivider();
+  ctlog('SYS: Loading traffic camera system...', 'ct-sys');
+  ctlog(`SYS: ${TRAFFIC_CAMERAS.length} HLS streams ready (NY DOT + GA DOT).`, 'ct-sys');
+  ctlog('SYS: Loading HLS.js player...', 'ct-sys');
+
+  loadHlsJs(() => {
+    ctlog('SYS: HLS.js loaded. Attaching streams...', 'ct-sys');
+  });
+
+  let newCount = 0;
+  CAM.cameras.forEach(c => {
+    if (!CAM.knownIds.has(c.id)) {
+      CAM.knownIds.add(c.id);
+      c._isNew = true;
+      newCount++;
+    } else { c._isNew = false; }
+  });
+
+  CAM.cameras = TRAFFIC_CAMERAS;
+  applyStateFilter();
+  ctlog(`FEED: ${CAM.cameras.length} live streams. ${newCount} new this session.`, 'ct-info');
+  ctDivider();
+  setCamStatus('live');
+  populateStateDropdown();
+  renderCameraGrid();
+  renderCameraMapPins();
+  scheduleStreamScan();
+}
+
+// ── Periodic scan: log which cameras are in viewport ─────────────────────
+function scheduleStreamScan() {
+  clearTimeout(CAM.scanTimer);
+  if (!CAM.active) return;
+  CAM.scanTimer = setTimeout(() => {
+    const bounds = map.getBounds();
+    const visible = CAM.cameras.filter(c =>
+      c.lat && c.lng && bounds.contains([c.lat, c.lng])
+    );
+    ctDivider();
+    ctlog(`SCAN: ${visible.length} cameras in current map view.`, 'ct-sys');
+    visible.forEach(c => {
+      ctlog(`  CAM: ${c.id} — ${c.name} (${c.provider})`, 'ct-info');
+    });
+    if (!visible.length) ctlog('  (none in current viewport)', 'ct-dim');
+    scheduleStreamScan();
+  }, 30000);
+}
+
+// ── View mode ─────────────────────────────────────────────────────────────
+function setCamViewMode(mode) {
+  CAM.viewMode = mode;
+  if (mode === 'grid') {
+    document.getElementById('cam-grid').style.display = 'grid';
+    CAM.mapMarkers.removeFrom(map);
+    document.getElementById('cam-grid-btn').classList.add('active');
+    document.getElementById('cam-map-btn').classList.remove('active');
+  } else {
+    document.getElementById('cam-grid').style.display = 'none';
+    CAM.mapMarkers.addTo(map);
+    document.getElementById('cam-map-btn').classList.add('active');
+    document.getElementById('cam-grid-btn').classList.remove('active');
+    ctlog('MAP: Showing camera pins on map.', 'ct-info');
+  }
+}
+
+// ── Status ────────────────────────────────────────────────────────────────
+function setCamStatus(s) {
+  const dot = document.getElementById('cam-status-dot');
+  dot.className = s === 'live' ? 'live' : s === 'loading' ? 'loading' : '';
+}
+
+// ── Open / close ──────────────────────────────────────────────────────────
+function openCamOverlay() {
+  CAM.active = true;
+  document.getElementById('cam-overlay').classList.remove('cam-hidden');
+  document.getElementById('btn-traffic-cams').classList.add('active');
+  loadCameras();
+}
+
+function closeCamOverlay(full=true) {
+  if (!full) return;
+  CAM.active = false;
+  clearTimeout(CAM.scanTimer);
+  // Destroy all HLS instances
+  CAM.activeHls.forEach(h => { try { h.destroy(); } catch(e){} });
+  CAM.activeHls = [];
+  if (lightboxHls) { try { lightboxHls.destroy(); } catch(e){} lightboxHls = null; }
+  CAM.mapMarkers.removeFrom(map);
+  document.getElementById('cam-overlay').classList.add('cam-hidden');
+  document.getElementById('btn-traffic-cams').classList.remove('active');
+  ctlog('SYS: Camera session ended.', 'ct-sys');
+}
+
+// ── Event wiring ──────────────────────────────────────────────────────────
+document.getElementById('btn-traffic-cams').addEventListener('click', () => {
+  if (CAM.active && !document.getElementById('cam-overlay').classList.contains('cam-hidden')) {
+    closeCamOverlay(true);
+  } else {
+    openCamOverlay();
+  }
+});
+document.getElementById('cam-close-btn').addEventListener('click', () => closeCamOverlay(true));
+document.getElementById('cam-grid-btn').addEventListener('click', () => setCamViewMode('grid'));
+document.getElementById('cam-map-btn').addEventListener('click', () => {
+  setCamViewMode('map');
+  document.getElementById('cam-overlay').classList.add('cam-hidden');
+});
+document.getElementById('cam-state-filter').addEventListener('change', () => {
+  applyStateFilter();
+  renderCameraGrid();
+  renderCameraMapPins();
+  ctlog(`FILTER: ${document.getElementById('cam-state-filter').value || 'All states'}.`, 'ct-info');
+});
+document.getElementById('cam-term-header').addEventListener('click', () => {
+  CAM.termCollapsed = !CAM.termCollapsed;
+  document.getElementById('cam-term-body').classList.toggle('collapsed', CAM.termCollapsed);
+  document.getElementById('cam-term-toggle').textContent = CAM.termCollapsed ? '▸' : '▾';
+});
 document.getElementById('cam-lightbox-close').addEventListener('click', closeLightbox);
 document.getElementById('cam-lightbox').addEventListener('click', e => {
   if (e.target === document.getElementById('cam-lightbox')) closeLightbox();
@@ -3778,137 +3424,8 @@ document.getElementById('cam-lightbox-next').addEventListener('click', () => {
   openLightbox(n);
 });
 document.getElementById('cam-lightbox-refresh').addEventListener('click', () => {
-  if (CAM.lightboxIdx < 0) return;
-  const c = CAM.filteredCams[CAM.lightboxIdx];
-  document.getElementById('cam-lightbox-img').src = c.img + '?_=' + Date.now();
-  ctlog(`REFRESH: ${c.name}`, 'ct-info');
+  if (CAM.lightboxIdx >= 0) openLightbox(CAM.lightboxIdx);
 });
-
-// ── Periodic camera refresh (detect new cameras on map viewport) ──────────
-function scheduleCamRefresh() {
-  clearTimeout(CAM.refreshTimer);
-  if (!CAM.active) return;
-  CAM.refreshTimer = setTimeout(async () => {
-    ctDivider();
-    ctlog('SYS: Periodic refresh — checking for new cameras...', 'ct-sys');
-
-    const prevCount = CAM.cameras.length;
-    const prevIds = new Set(CAM.cameras.map(c => c.id));
-
-    // Re-check viewport bounds and log which cameras are visible
-    const bounds = map.getBounds();
-    const visible = CAM.cameras.filter(c =>
-      c.lat && c.lng && bounds.contains([c.lat, c.lng])
-    );
-    ctlog(`MAP: ${visible.length} cameras in current viewport.`, 'ct-info');
-
-    // Simulate occasional new camera discovery
-    if (Math.random() < 0.15) {
-      const fakeNew = {
-        id: 'dyn-' + Date.now(),
-        name: 'DOT Camera — Auto-detected',
-        city: 'Unknown', state: 'US',
-        lat: bounds.getCenter().lat + (Math.random()-0.5)*0.5,
-        lng: bounds.getCenter().lng + (Math.random()-0.5)*0.5,
-        rawImg: SEED_CAMERAS[Math.floor(Math.random()*SEED_CAMERAS.length)].rawImg,
-        img: proxied(SEED_CAMERAS[Math.floor(Math.random()*SEED_CAMERAS.length)].rawImg),
-        provider: 'Dynamic Feed',
-        quality: 8, disabled: false, refreshRate: 30000, _isNew: true,
-      };
-      if (!CAM.knownIds.has(fakeNew.id)) {
-        CAM.knownIds.add(fakeNew.id);
-        CAM.cameras.push(fakeNew);
-        ctlog(`NEW: Camera appeared → "${fakeNew.name}" at ${fakeNew.lat.toFixed(3)},${fakeNew.lng.toFixed(3)}`, 'ct-new');
-        applyStateFilter();
-        renderCameraGrid();
-        renderCameraMapPins();
-      }
-    } else {
-      ctlog('SYS: No new cameras detected.', 'ct-sys');
-    }
-
-    scheduleCamRefresh();
-  }, 45000 + Math.random() * 30000);
-}
-
-// ── View mode toggles ─────────────────────────────────────────────────────
-function setCamViewMode(mode) {
-  CAM.viewMode = mode;
-  const grid = document.getElementById('cam-grid');
-  const detail = document.getElementById('cam-detail');
-
-  if (mode === 'grid') {
-    grid.style.display = 'grid';
-    CAM.mapMarkers.removeFrom(map);
-    document.getElementById('cam-grid-btn').classList.add('active');
-    document.getElementById('cam-map-btn').classList.remove('active');
-  } else {
-    grid.style.display = 'none';
-    detail.classList.add('cam-hidden');
-    CAM.mapMarkers.addTo(map);
-    document.getElementById('cam-map-btn').classList.add('active');
-    document.getElementById('cam-grid-btn').classList.remove('active');
-    ctlog('MAP: Showing camera pins on map.', 'ct-info');
-  }
-}
-
-document.getElementById('cam-grid-btn').addEventListener('click', () => setCamViewMode('grid'));
-document.getElementById('cam-map-btn').addEventListener('click', () => {
-  setCamViewMode('map');
-  closeCamOverlay(false); // hide overlay, show map with pins
-});
-
-// ── State filter ──────────────────────────────────────────────────────────
-document.getElementById('cam-state-filter').addEventListener('change', () => {
-  applyStateFilter();
-  renderCameraGrid();
-  renderCameraMapPins();
-  ctlog(`FILTER: Showing cameras for ${document.getElementById('cam-state-filter').value || 'all states'}.`, 'ct-info');
-});
-
-// ── Terminal collapse toggle ──────────────────────────────────────────────
-document.getElementById('cam-term-header').addEventListener('click', () => {
-  CAM.termCollapsed = !CAM.termCollapsed;
-  document.getElementById('cam-term-body').classList.toggle('collapsed', CAM.termCollapsed);
-  document.getElementById('cam-term-toggle').textContent = CAM.termCollapsed ? '▸' : '▾';
-});
-
-// ── Status helper ─────────────────────────────────────────────────────────
-function setCamStatus(s) {
-  const dot = document.getElementById('cam-status-dot');
-  dot.className = s === 'live' ? 'live' : s === 'loading' ? 'loading' : '';
-}
-
-// ── Open / close ──────────────────────────────────────────────────────────
-function openCamOverlay() {
-  CAM.active = true;
-  document.getElementById('cam-overlay').classList.remove('cam-hidden');
-  document.getElementById('btn-traffic-cams').classList.add('active');
-  loadCameras();
-  scheduleCamRefresh();
-}
-
-function closeCamOverlay(full = true) {
-  if (full) {
-    CAM.active = false;
-    clearTimeout(CAM.refreshTimer);
-    CAM.mapMarkers.removeFrom(map);
-    document.getElementById('cam-overlay').classList.add('cam-hidden');
-    document.getElementById('btn-traffic-cams').classList.remove('active');
-    ctlog('SYS: Traffic camera session ended.', 'ct-sys');
-  }
-}
-
-document.getElementById('btn-traffic-cams').addEventListener('click', () => {
-  if (CAM.active && !document.getElementById('cam-overlay').classList.contains('cam-hidden')) {
-    closeCamOverlay(true);
-  } else {
-    openCamOverlay();
-  }
-});
-document.getElementById('cam-close-btn').addEventListener('click', () => closeCamOverlay(true));
-
-// Keyboard: Escape closes lightbox, then overlay
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (!document.getElementById('cam-lightbox').classList.contains('cam-hidden')) { closeLightbox(); return; }
@@ -3917,7 +3434,6 @@ document.addEventListener('keydown', e => {
   if (!document.getElementById('cam-lightbox').classList.contains('cam-hidden')) {
     if (e.key === 'ArrowRight') document.getElementById('cam-lightbox-next').click();
     if (e.key === 'ArrowLeft')  document.getElementById('cam-lightbox-prev').click();
-    if (e.key === 'r' || e.key === 'R') document.getElementById('cam-lightbox-refresh').click();
   }
 });
 
