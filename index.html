@@ -891,6 +891,41 @@
   #btn-traffic-cams { background: rgba(6,10,16,0.85); }
   #btn-traffic-cams.active { border-color: #00d4ff; color: #00d4ff; background: rgba(0,212,255,0.1); }
 
+
+  /* ── FLASH FLOOD WARNING LAYER ── */
+  .ff-polygon-path {
+    animation: ff-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes ff-pulse {
+    0%,100% { fill-opacity: 0.35; stroke-opacity: 1; }
+    50%      { fill-opacity: 0.12; stroke-opacity: 0.5; }
+  }
+  /* Flash Flood counter badge on map */
+  #ff-map-badge {
+    position: absolute;
+    top: 48px;
+    left: 10px;
+    z-index: 900;
+    background: #8b0000;
+    color: #fff;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 4px 10px;
+    border-radius: 2px;
+    pointer-events: none;
+    display: none;
+    border: 1px solid rgba(255,100,100,0.4);
+    box-shadow: 0 0 10px rgba(139,0,0,0.5);
+    animation: ff-badge-pulse 2s ease-in-out infinite;
+    text-transform: uppercase;
+  }
+  @keyframes ff-badge-pulse {
+    0%,100% { box-shadow: 0 0 10px rgba(139,0,0,0.5); }
+    50%      { box-shadow: 0 0 20px rgba(139,0,0,0.9); }
+  }
+
   @media (max-width: 700px) {
     #sidebar { width: 100%; position: absolute; top: 0; left: 0; height: 55vh; z-index: 2000; }
     #map-container { position: absolute; top: 55vh; left: 0; right: 0; bottom: 0; }
@@ -925,6 +960,13 @@
       <div class="toggle-row">
         <label for="t-alerts">Alert Zones</label>
         <label class="toggle"><input type="checkbox" id="t-alerts" checked><span class="slider"></span></label>
+      </div>
+      <div class="toggle-row">
+        <label for="t-flash-flood" style="display:flex;align-items:center;gap:5px">
+          <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#8b0000;flex-shrink:0"></span>
+          Flash Flood Warnings
+        </label>
+        <label class="toggle"><input type="checkbox" id="t-flash-flood" checked><span class="slider"></span></label>
       </div>
       <div class="toggle-row">
         <label for="t-stations">Radar Stations</label>
@@ -1109,6 +1151,7 @@
   <!-- MAP -->
   <div id="map-container">
     <div id="map"></div>
+    <div id="ff-map-badge">💧 0 Flash Flood Warnings</div>
     <div id="map-topbar">
       <button class="map-btn active" id="btn-streets">Streets</button>
       <button class="map-btn" id="btn-dark">Dark</button>
@@ -3522,6 +3565,216 @@ document.addEventListener('keydown', e => {
   }
 });
 
+
+// =============================================
+//  FLASH FLOOD WARNING LAYER
+// =============================================
+// Dedicated high-visibility layer for Flash Flood Warnings.
+// These are fetched directly from the NWS CAP GeoJSON feed which returns
+// full polygon geometry — no zone lookup required.
+// Endpoint: api.weather.gov/alerts/active?event=Flash+Flood+Warning
+// Returns GeoJSON FeatureCollection with geometry on each feature.
+
+const FF_EVENTS = new Set([
+  'Flash Flood Warning',
+  'Flash Flood Emergency',
+  'Flash Flood Statement',
+  'Flash Flood Watch',
+  'Areal Flood Warning',
+  'Flood Warning',
+]);
+
+const FF_COLORS = {
+  'Flash Flood Emergency': '#c0392b',
+  'Flash Flood Warning':   '#8b0000',
+  'Flood Warning':         '#00a550',
+  'Areal Flood Warning':   '#00a550',
+  'Flash Flood Watch':     '#2e8b57',
+  'Flash Flood Statement': '#8b0000',
+};
+
+const ffState = {
+  visible:      true,
+  layerGroup:   L.layerGroup(),
+  polygons:     {},   // id → L.geoJSON layer
+  knownIds:     new Set(),
+  refreshTimer: null,
+};
+
+// Add FF layer above alert layer (higher zIndex)
+ffState.layerGroup.addTo(map);
+
+async function fetchFloodWarnings() {
+  const events = [
+    'Flash+Flood+Warning',
+    'Flash+Flood+Emergency',
+    'Flood+Warning',
+    'Flash+Flood+Watch',
+    'Flash+Flood+Statement',
+    'Areal+Flood+Warning',
+  ];
+  const allFeatures = [];
+  // Fetch all at once via the multi-event endpoint
+  try {
+    const url = `https://api.weather.gov/alerts/active?status=actual&message_type=alert,update&event=${events.join(',').replace(/\+/g,'%20')}&limit=500`;
+    const r = await fetch(url, { headers: { 'Accept': 'application/geo+json' }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    allFeatures.push(...(data.features || []));
+  } catch(e) {
+    console.warn('FF Warning fetch failed:', e);
+  }
+  return allFeatures;
+}
+
+function buildFFPopup(props, color) {
+  const evt    = props.event || 'Alert';
+  const area   = props.areaDesc || '';
+  const head   = props.headline || '';
+  const desc   = (props.description || '').substring(0, 400);
+  const exp    = props.expires ? new Date(props.expires).toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+  return `<div style="font-family:'Barlow Condensed',sans-serif;min-width:220px;max-width:300px">
+    <div style="font-size:15px;font-weight:700;color:${color};margin-bottom:4px">💧 ${evt}</div>
+    <div style="font-size:11px;color:#aaa;margin-bottom:6px">${area}</div>
+    ${head ? `<div style="font-size:11px;color:#c8d8e8;margin-bottom:5px;font-style:italic">${head}</div>` : ''}
+    ${desc ? `<div style="font-size:10px;color:#888;line-height:1.4;margin-bottom:5px;max-height:80px;overflow:hidden">${desc}…</div>` : ''}
+    <div style="font-family:monospace;font-size:10px;color:#555">EXP: ${exp}</div>
+  </div>`;
+}
+
+async function refreshFloodWarnings() {
+  const features = await fetchFloodWarnings();
+  const currentIds = new Set();
+
+  let newCount = 0;
+  features.forEach(f => {
+    const id    = f.id || f.properties?.id;
+    const props = f.properties || {};
+    const evt   = props.event || '';
+    if (!FF_EVENTS.has(evt)) return;
+    if (!id) return;
+    currentIds.add(id);
+
+    // Already drawn
+    if (ffState.polygons[id]) return;
+
+    // Need geometry
+    const geom = f.geometry;
+    if (!geom || !geom.coordinates || !geom.coordinates.length) {
+      // No direct geometry — try resolving from UGC zones
+      const ugc = props.geocode?.UGC || [];
+      if (ugc.length) {
+        // Fire-and-forget zone resolution
+        Promise.all(ugc.map(z => fetchZoneGeometry(z))).then(geoms => {
+          const valid = geoms.filter(g => g && g.coordinates?.length);
+          if (!valid.length) return;
+          let merged;
+          if (valid.length === 1) {
+            merged = valid[0];
+          } else {
+            const rings = [];
+            valid.forEach(g => {
+              if (g.type === 'Polygon') rings.push(g.coordinates);
+              else if (g.type === 'MultiPolygon') rings.push(...g.coordinates);
+            });
+            merged = { type: 'MultiPolygon', coordinates: rings };
+          }
+          drawFFPolygon(id, merged, props, evt);
+        });
+      }
+      return;
+    }
+
+    drawFFPolygon(id, geom, props, evt);
+    if (!ffState.knownIds.has(id)) { ffState.knownIds.add(id); newCount++; }
+  });
+
+  // Remove expired
+  Object.keys(ffState.polygons).forEach(id => {
+    if (!currentIds.has(id)) {
+      ffState.layerGroup.removeLayer(ffState.polygons[id]);
+      delete ffState.polygons[id];
+    }
+  });
+
+  updateFFBadge(Object.keys(ffState.polygons).length);
+  if (newCount > 0) showFFToast(newCount, features);
+}
+
+function drawFFPolygon(id, geom, props, evt) {
+  if (ffState.polygons[id]) {
+    ffState.layerGroup.removeLayer(ffState.polygons[id]);
+  }
+  const color = FF_COLORS[evt] || '#8b0000';
+  const isEmergency = evt === 'Flash Flood Emergency';
+  const isWarning   = evt.includes('Warning');
+
+  const layer = L.geoJSON({ type:'Feature', geometry:geom, properties:props }, {
+    style: {
+      color:       color,
+      weight:      isEmergency ? 3 : 2,
+      fillColor:   color,
+      fillOpacity: isEmergency ? 0.4 : isWarning ? 0.28 : 0.15,
+      opacity:     1,
+      className:   isWarning ? 'ff-polygon-path' : '',
+    }
+  });
+
+  layer.bindPopup(buildFFPopup(props, color), { maxWidth: 320, className: 'alert-popup' });
+
+  layer.on('mouseover', function() { this.setStyle({ weight: 3, fillOpacity: 0.5 }); this.bringToFront(); });
+  layer.on('mouseout',  function() { this.setStyle({ weight: isEmergency ? 3 : 2, fillOpacity: isEmergency ? 0.4 : isWarning ? 0.28 : 0.15 }); });
+
+  ffState.polygons[id] = layer;
+  if (ffState.visible) ffState.layerGroup.addLayer(layer);
+}
+
+function updateFFBadge(count) {
+  const badge = document.getElementById('ff-map-badge');
+  if (!badge) return;
+  if (count === 0) {
+    badge.style.display = 'none';
+  } else {
+    badge.style.display = 'block';
+    badge.textContent = `💧 ${count} Flash Flood Warning${count !== 1 ? 's' : ''}`;
+  }
+}
+
+function showFFToast(count, features) {
+  // Flash Flood Emergency gets its own extra-prominent toast
+  const emergencies = features.filter(f => f.properties?.event === 'Flash Flood Emergency');
+  if (emergencies.length) {
+    emergencies.forEach(f => {
+      const toast = document.getElementById('toast');
+      const div = document.createElement('div');
+      div.className = 'toast-item';
+      div.style.cssText = 'border-left-color:#c0392b;background:#1a0000;border:1px solid rgba(192,57,43,0.4);border-left:4px solid #c0392b;';
+      div.innerHTML = `<div style="font-weight:700;color:#c0392b;font-size:14px">🚨 FLASH FLOOD EMERGENCY</div><div style="font-size:11px;color:#aaa;margin-top:2px">${f.properties?.areaDesc || ''}</div>`;
+      toast.appendChild(div);
+      setTimeout(() => { div.style.transition='opacity 0.5s'; div.style.opacity='0'; setTimeout(()=>div.remove(),500); }, 10000);
+    });
+  }
+}
+
+// Toggle
+document.getElementById('t-flash-flood').addEventListener('change', function() {
+  ffState.visible = this.checked;
+  if (ffState.visible) {
+    ffState.layerGroup.addTo(map);
+  } else {
+    map.removeLayer(ffState.layerGroup);
+  }
+});
+
+// Poll every 60s (NWS recommends no more frequent than this)
+function scheduleFFRefresh() {
+  clearTimeout(ffState.refreshTimer);
+  ffState.refreshTimer = setTimeout(async () => {
+    await refreshFloodWarnings();
+    scheduleFFRefresh();
+  }, 60000);
+}
+
 // =============================================
 //  INIT & POLLING
 // =============================================
@@ -3530,6 +3783,8 @@ async function init() {
   loadCounties();
   loadStations();
   await refreshAlerts();
+  await refreshFloodWarnings();
+  scheduleFFRefresh();
   updateTimestamp();
 }
 
