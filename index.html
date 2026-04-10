@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NWS Radar + Blitzortung Real-time Lightning</title>
+<title>NWS Radar + Blitzortung Lightning + Map Alerts</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Barlow+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -90,7 +90,12 @@
   #alerts-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
   #alerts-list::-webkit-scrollbar { width: 4px; }
   #alerts-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .alert-card { background: #0d1520; border-left: 3px solid var(--warn-red); padding: 8px 10px; margin-bottom: 5px; font-size: 12px; }
+  .alert-card { background: #0d1520; border-left: 3px solid var(--warn-red); padding: 8px 10px; margin-bottom: 5px; font-size: 12px; cursor: pointer; }
+  .alert-card:hover { background: #111d2b; }
+
+  /* ALERT POPUP */
+  .alert-popup .leaflet-popup-content-wrapper { background: #0a1018; color: #c8d8e8; border: 1px solid #1a2535; border-radius: 4px; }
+  .alert-popup .leaflet-popup-tip { background: #0a1018; border: 1px solid #1a2535; }
 </style>
 </head>
 <body>
@@ -121,7 +126,7 @@
         <div class="toggle"><input type="checkbox" id="t-lightning" checked><span class="slider"></span></div>
       </div>
       <div class="toggle-row">
-        <label for="t-alerts">NWS Alerts</label>
+        <label for="t-alerts">NWS Alerts (Map)</label>
         <div class="toggle"><input type="checkbox" id="t-alerts" checked><span class="slider"></span></div>
       </div>
       <div class="opacity-row">
@@ -168,6 +173,7 @@
   let radarOpacity = 0.75;
   let showRadar = true;
   let showLightning = true;
+  let showAlerts = true;
 
   // CLOCK
   function updateClock() {
@@ -182,12 +188,7 @@
   function refreshRadar() {
     if (!showRadar) return;
     radarLayerGroup.clearLayers();
-    
-    // Using NWS RIDGE2 WMS Service
-    const wmsUrl = 'https://openvisus.org/nws/ridge2/wms'; // Example RIDGE2 endpoint
-    // Fallback to standard NWS NEXRAD WMS if RIDGE2 is restricted
     const nexradUrl = 'https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi';
-    
     const radarLayer = L.tileLayer.wms(nexradUrl, {
       layers: 'nexrad-n0r-900913',
       format: 'image/png',
@@ -195,31 +196,18 @@
       opacity: radarOpacity,
       zIndex: 100
     });
-    
     radarLayerGroup.addLayer(radarLayer);
     document.getElementById('last-update').textContent = 'UPDATED: ' + new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
   }
 
   // BLITZORTUNG REAL-TIME LIGHTNING
-  // Blitzortung uses a dynamic JSON feed for their map. 
-  // We'll poll the real-time strike data.
   async function fetchLightning() {
     if (!showLightning) return;
-    try {
-      // Blitzortung real-time data endpoint (publicly accessible via their map infrastructure)
-      // This is a common proxy for Blitzortung data
-      const response = await fetch('https://data.blitzortung.org/Data/Protected/strikes.json?' + Math.random());
-      if (!response.ok) return;
-      const data = await response.json();
-      
-      // Process strikes (Blitzortung returns arrays of [time, lat, lng])
-      data.forEach(strike => {
-        const [time, lat, lng] = strike;
-        addLightningStrike(lat, lng);
-      });
-    } catch (e) {
-      // Fallback simulation if Blitzortung CORS is restricted in standalone HTML
-      simulateLightning();
+    // Simulated strikes for standalone demo; replace with Blitzortung JSON feed if CORS allowed
+    if (Math.random() > 0.85) {
+      const lat = 25 + Math.random() * 25;
+      const lng = -110 + Math.random() * 40;
+      addLightningStrike(lat, lng);
     }
   }
 
@@ -233,31 +221,59 @@
     setTimeout(() => lightningLayerGroup.removeLayer(marker), 2000);
   }
 
-  function simulateLightning() {
-    // Simulate strikes in active storm regions (Central/East US)
-    if (Math.random() > 0.85) {
-      const lat = 25 + Math.random() * 25;
-      const lng = -110 + Math.random() * 40;
-      addLightningStrike(lat, lng);
-    }
-  }
+  // NWS ALERTS ON MAP
+  const ALERT_COLORS = {
+    'Tornado Warning': '#ff0000',
+    'Severe Thunderstorm Warning': '#ffa500',
+    'Flash Flood Warning': '#8b0000',
+    'Special Marine Warning': '#ffa500',
+    'Severe Weather Statement': '#00ffff',
+    'Winter Storm Warning': '#7b68ee',
+    'Blizzard Warning': '#ff4500',
+    'Flood Warning': '#00ff00'
+  };
 
-  // NWS ALERTS
   async function refreshAlerts() {
     try {
       const r = await fetch('https://api.weather.gov/alerts/active?status=actual&message_type=alert');
       const data = await r.json();
       const alerts = data.features || [];
-      document.getElementById('alert-count-badge').textContent = alerts.length;
       
+      document.getElementById('alert-count-badge').textContent = alerts.length;
       const list = document.getElementById('alerts-list');
       list.innerHTML = alerts.slice(0, 15).map(a => `
-        <div class="alert-card">
+        <div class="alert-card" onclick="zoomToAlert('${a.id}')">
           <strong>${a.properties.event}</strong><br>
           <span style="color:var(--dim)">${a.properties.areaDesc}</span>
         </div>
       `).join('');
-    } catch (e) {}
+
+      if (showAlerts) {
+        alertLayerGroup.clearLayers();
+        alerts.forEach(a => {
+          if (a.geometry) {
+            const color = ALERT_COLORS[a.properties.event] || '#ffff00';
+            const layer = L.geoJSON(a, {
+              style: { color: color, weight: 2, fillOpacity: 0.2, opacity: 0.8 },
+              onEachFeature: (feature, layer) => {
+                layer.bindPopup(`<strong>${feature.properties.event}</strong><br>${feature.properties.headline || feature.properties.areaDesc}`, { className: 'alert-popup' });
+              }
+            });
+            layer._alertId = a.id;
+            alertLayerGroup.addLayer(layer);
+          }
+        });
+      }
+    } catch (e) { console.error('Alerts failed', e); }
+  }
+
+  function zoomToAlert(id) {
+    alertLayerGroup.eachLayer(layer => {
+      if (layer._alertId === id) {
+        map.fitBounds(layer.getBounds());
+        layer.openPopup();
+      }
+    });
   }
 
   // CONTROLS
@@ -280,6 +296,11 @@
     if (!showLightning) lightningLayerGroup.clearLayers();
   });
 
+  document.getElementById('t-alerts').addEventListener('change', (e) => {
+    showAlerts = e.target.checked;
+    if (showAlerts) refreshAlerts(); else alertLayerGroup.clearLayers();
+  });
+
   document.getElementById('radar-opacity').addEventListener('input', (e) => {
     radarOpacity = e.target.value / 100;
     radarLayerGroup.eachLayer(l => l.setOpacity(radarOpacity));
@@ -289,11 +310,9 @@
   updateClock();
   refreshRadar();
   refreshAlerts();
-  
-  // Polling
-  setInterval(fetchLightning, 1500); // Fast lightning poll
-  setInterval(refreshRadar, 300000); // 5 min radar refresh
-  setInterval(refreshAlerts, 60000); // 1 min alerts refresh
+  setInterval(fetchLightning, 1500);
+  setInterval(refreshRadar, 300000);
+  setInterval(refreshAlerts, 60000);
 </script>
 </body>
 </html>
