@@ -24,7 +24,6 @@ set LOG_FILE=camera_terminal.log
 :: Script lives next to index.html and camera_terminal.py
 set SCRIPT_DIR=%~dp0
 set PY_SCRIPT=%SCRIPT_DIR%camera_terminal.py
-set HTML_FILE=%SCRIPT_DIR%index.html
 
 :: ── Window appearance ────────────────────────────────────────
 title NWS Radar — Camera Feed Terminal
