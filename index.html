@@ -1962,66 +1962,252 @@ function evApplyLayer() {
 })();
 
 // =============================================
-//  LIGHTNING STRIKES
+//  LIGHTNING STRIKES — Real-Time, Time-Synced
+//  Source: Blitzortung.org WebSocket
+//  Protocol: Binary-encoded JSON with nanosecond timestamps
+//  Time-sync: Strike age computed from actual strike nanosecond
+//              timestamp vs current wall clock.  Old strikes
+//              (>10 min) received on reconnect are dropped.
 // =============================================
-const ltngState={ws:null,enabled:true,layerGroup:L.layerGroup().addTo(map),markers:[],recentTimes:[],retryTimer:null,retryDelay:2000,maxMarkers:300,fadeMs:8000};
-const LTNG_WS_SERVERS=['wss://ws1.blitzortung.org/','wss://ws7.blitzortung.org/','wss://ws8.blitzortung.org/'];
-let ltngServerIdx=0;
 
-function ltngSetStatus(st,text){const dot=document.getElementById('ltng-ws-dot');const label=document.getElementById('ltng-ws-label');if(dot)dot.className=st;if(label)label.textContent=text;}
+const ltngState = {
+  ws: null,
+  enabled: true,
+  layerGroup: L.layerGroup().addTo(map),
+  markers: [],           // {marker, strikeTimeMs}
+  recentTimes: [],       // actual strike wall-clock ms for rate calc
+  retryTimer: null,
+  retryDelay: 2000,
+  maxMarkers: 500,
+  fadeMs: 10000,         // how long a strike ripple is visible
+  maxAgeMs: 10 * 60000  // discard strikes older than 10 min
+};
 
-function ltngConnect(){
-  if(!ltngState.enabled) return; ltngSetStatus('connect','Connecting…');
-  const url=LTNG_WS_SERVERS[ltngServerIdx%LTNG_WS_SERVERS.length]; const ws=new WebSocket(url); ltngState.ws=ws;
-  ws.onopen=()=>{ltngState.retryDelay=2000;ltngSetStatus('live','Live feed');ws.send(JSON.stringify({a:111}));updateLightningBadge();};
-  ws.onmessage=(evt)=>{
-    if(!ltngState.enabled) return;
-    try{const data=JSON.parse(evt.data);
-      if(data.lat!==undefined&&data.lon!==undefined){const lat=data.lat/1e6;const lon=data.lon/1e6;if(lat>14&&lat<72&&lon>-170&&lon<-50)spawnLightningStrike(lat,lon);}
-      if(Array.isArray(data.locs)){data.locs.forEach(loc=>{if(loc.lat!==undefined){const lat=loc.lat/1e6;const lon=loc.lon/1e6;if(lat>14&&lat<72&&lon>-170&&lon<-50)spawnLightningStrike(lat,lon);}});}
-      if(Array.isArray(data.sig)){data.sig.forEach(s=>{const lat=s.lat/1e6;const lon=s.lon/1e6;if(lat>14&&lat<72&&lon>-170&&lon<-50)spawnLightningStrike(lat,lon);});}
-    }catch(e){}
+// Only ws1 is reliably reachable; others are IPv6-only or have expired certs
+const LTNG_WS_SERVERS = [
+  'wss://ws1.blitzortung.org/',
+  'wss://ws3.blitzortung.org/',
+  'wss://ws5.blitzortung.org/',
+  'wss://ws6.blitzortung.org/'
+];
+let ltngServerIdx = 0;
+
+function ltngSetStatus(st, text) {
+  const dot   = document.getElementById('ltng-ws-dot');
+  const label = document.getElementById('ltng-ws-label');
+  if (dot)   dot.className   = st;
+  if (label) label.textContent = text;
+}
+
+// ── Parse the Blitzortung binary-encoded JSON ──────────────────────────
+// The server sends JSON where every character with codepoint > 127 is
+// a *value* byte for the preceding ASCII key, not a separator.
+// We extract lat, lon, and time via regex on the raw string.
+function ltngParseStrike(raw) {
+  try {
+    // time is a plain decimal integer (nanoseconds since Unix epoch)
+    const timeMatch = raw.match(/"time":(\d{13,20})/);
+    // lat/lon are plain floats — they appear right after their UTF-8-mangled keys
+    // Key "lat" is followed by a 2-byte UTF-8 sequence then the float value
+    const latMatch  = raw.match(/"lat[\x80-\xFF]{0,3}(-?[0-9]+\.[0-9]+)/);
+    const lonMatch  = raw.match(/"lon[\x80-\xFF]{0,3}(-?[0-9]+\.[0-9]+)/);
+
+    if (!timeMatch || !latMatch || !lonMatch) return null;
+
+    const strikeNs = parseFloat(timeMatch[1]);
+    const strikeMs = strikeNs / 1e6;         // convert ns → ms
+    const lat      = parseFloat(latMatch[1]);
+    const lon      = parseFloat(lonMatch[1]);
+
+    // Sanity checks
+    if (!isFinite(lat) || !isFinite(lon) || !isFinite(strikeMs)) return null;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180)               return null;
+
+    return { lat, lon, strikeMs };
+  } catch (e) { return null; }
+}
+
+function ltngConnect() {
+  if (!ltngState.enabled) return;
+  ltngSetStatus('connect', 'Connecting…');
+  const url = LTNG_WS_SERVERS[ltngServerIdx % LTNG_WS_SERVERS.length];
+  const ws  = new WebSocket(url);
+  ltngState.ws = ws;
+
+  ws.onopen = () => {
+    ltngState.retryDelay = 2000;
+    ltngSetStatus('live', 'Live ⚡ ' + url.replace('wss://','').replace('/',''));
+    ws.send(JSON.stringify({ a: 111 }));   // subscribe to all regions
+    updateLightningBadge();
   };
-  ws.onerror=()=>ltngSetStatus('off','WS error — retrying…');
-  ws.onclose=()=>{
-    if(!ltngState.enabled){ltngSetStatus('off','Lightning: OFF');return;}
-    ltngServerIdx++; ltngSetStatus('connect',`Reconnect in ${Math.round(ltngState.retryDelay/1000)}s…`); clearTimeout(ltngState.retryTimer);
-    ltngState.retryTimer=setTimeout(()=>{ltngState.retryDelay=Math.min(ltngState.retryDelay*1.5,30000);ltngConnect();},ltngState.retryDelay);
+
+  ws.onmessage = (evt) => {
+    if (!ltngState.enabled) return;
+    const raw = typeof evt.data === 'string' ? evt.data : '';
+    if (!raw) return;
+
+    const strike = ltngParseStrike(raw);
+    if (!strike) return;
+
+    const { lat, lon, strikeMs } = strike;
+    const nowMs     = Date.now();
+    const ageMs     = nowMs - strikeMs;
+
+    // Drop strikes that are too old (stale backfill on reconnect) or future
+    if (ageMs > ltngState.maxAgeMs || ageMs < -5000) return;
+
+    // Region filter: North America + Caribbean
+    if (lat < 14 || lat > 72 || lon < -170 || lon > -50) return;
+
+    spawnLightningStrike(lat, lon, strikeMs);
+  };
+
+  ws.onerror = () => ltngSetStatus('off', 'WS error — retrying…');
+
+  ws.onclose = () => {
+    if (!ltngState.enabled) { ltngSetStatus('off', 'Lightning: OFF'); return; }
+    ltngServerIdx++;
+    const delay = Math.round(ltngState.retryDelay / 1000);
+    ltngSetStatus('connect', `Reconnect ${delay}s… (${LTNG_WS_SERVERS[ltngServerIdx % LTNG_WS_SERVERS.length].replace('wss://','').replace('/','')})`);
+    clearTimeout(ltngState.retryTimer);
+    ltngState.retryTimer = setTimeout(() => {
+      ltngState.retryDelay = Math.min(ltngState.retryDelay * 1.5, 30000);
+      ltngConnect();
+    }, ltngState.retryDelay);
   };
 }
 
-function ltngDisconnect(){clearTimeout(ltngState.retryTimer);if(ltngState.ws){ltngState.ws.onclose=null;ltngState.ws.close();ltngState.ws=null;}ltngSetStatus('off','Lightning: OFF');}
+function ltngDisconnect() {
+  clearTimeout(ltngState.retryTimer);
+  if (ltngState.ws) { ltngState.ws.onclose = null; ltngState.ws.close(); ltngState.ws = null; }
+  ltngSetStatus('off', 'Lightning: OFF');
+}
 
-function spawnLightningStrike(lat,lon){
-  const now=Date.now(); ltngState.recentTimes.push(now); ltngState.recentTimes=ltngState.recentTimes.filter(t=>now-t<60000);
-  const sz=64,cx=32,cy=32; const col=Math.random()<0.65?'#ffd700':(Math.random()<0.5?'#ffe88a':'#b0e0ff'); const dur=(ltngState.fadeMs/1000).toFixed(1);
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}">
-    <defs><filter id="lg${now}" x="-200%" y="-200%" width="500%" height="500%"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter></defs>
-    <circle cx="${cx}" cy="${cy}" r="16" fill="${col}" opacity="0.18" filter="url(#lg${now})"><animate attributeName="r" from="8" to="30" dur="${dur}s" fill="freeze"/><animate attributeName="opacity" from="0.22" to="0" dur="${dur}s" fill="freeze"/></circle>
-    <circle cx="${cx}" cy="${cy}" r="4" fill="none" stroke="${col}" stroke-width="1.8" opacity="1"><animate attributeName="r" from="4" to="26" dur="${dur}s" fill="freeze"/><animate attributeName="opacity" from="1" to="0" dur="${dur}s" fill="freeze"/></circle>
-    <circle cx="${cx}" cy="${cy}" r="4" fill="${col}" opacity="1"><animate attributeName="r" from="4" to="1" dur="${(ltngState.fadeMs*0.35/1000).toFixed(1)}s" fill="freeze"/><animate attributeName="opacity" from="1" to="0" dur="${(ltngState.fadeMs*0.35/1000).toFixed(1)}s" fill="freeze"/></circle>
-  </svg>`;
-  const icon=L.divIcon({className:'',html:svg,iconSize:[sz,sz],iconAnchor:[cx,cy]});
-  const marker=L.marker([lat,lon],{icon,interactive:false,zIndexOffset:850}); marker.addTo(ltngState.layerGroup);
-  ltngState.markers.push({marker,born:now});
-  setTimeout(()=>{ltngState.layerGroup.removeLayer(marker);ltngState.markers=ltngState.markers.filter(m=>m.marker!==marker);updateLightningBadge();},ltngState.fadeMs+300);
-  if(ltngState.markers.length>ltngState.maxMarkers){const excess=ltngState.markers.splice(0,ltngState.markers.length-ltngState.maxMarkers);excess.forEach(m=>ltngState.layerGroup.removeLayer(m.marker));}
+// ── Spawn a time-aware lightning strike marker ─────────────────────────
+// strikeMs = actual Unix epoch ms of the strike.
+// The ripple animation fades over fadeMs.  If the strike already has some
+// age, we reduce the remaining fade so older strikes appear dimmer.
+function spawnLightningStrike(lat, lon, strikeMs) {
+  const nowMs  = Date.now();
+  const ageMs  = Math.max(0, nowMs - strikeMs);
+
+  // Track for rate counter using actual strike time
+  ltngState.recentTimes.push(strikeMs);
+  ltngState.recentTimes = ltngState.recentTimes.filter(t => nowMs - t < 60000);
+
+  // Remaining visible time (at least 1 s)
+  const remaining = Math.max(1000, ltngState.fadeMs - ageMs);
+  const dur       = (remaining / 1000).toFixed(1);
+  const shortDur  = (remaining * 0.35 / 1000).toFixed(1);
+
+  // Color by age: fresh = gold, 1-3 min = pale yellow, older = light blue
+  const col = ageMs < 30000   ? '#ffd700'
+            : ageMs < 180000  ? '#ffe88a'
+            : '#b0e0ff';
+
+  // Opacity also decays with age
+  const ageRatio  = Math.min(1, ageMs / ltngState.fadeMs);
+  const baseOpacity = (1 - ageRatio * 0.7).toFixed(2);
+
+  const id  = `lg${nowMs}_${Math.random().toString(36).slice(2,6)}`;
+  const sz  = 64, cx = 32, cy = 32;
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}">
+  <defs>
+    <filter id="${id}" x="-200%" y="-200%" width="500%" height="500%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4"/>
+    </filter>
+  </defs>
+  <!-- Glow halo -->
+  <circle cx="${cx}" cy="${cy}" r="16" fill="${col}" opacity="${(parseFloat(baseOpacity)*0.18).toFixed(2)}"
+    filter="url(#${id})">
+    <animate attributeName="r"       from="8"  to="30" dur="${dur}s" fill="freeze"/>
+    <animate attributeName="opacity" from="${(parseFloat(baseOpacity)*0.22).toFixed(2)}" to="0" dur="${dur}s" fill="freeze"/>
+  </circle>
+  <!-- Expanding ring -->
+  <circle cx="${cx}" cy="${cy}" r="4" fill="none" stroke="${col}" stroke-width="1.8"
+    opacity="${baseOpacity}">
+    <animate attributeName="r"       from="4"  to="26" dur="${dur}s" fill="freeze"/>
+    <animate attributeName="opacity" from="${baseOpacity}" to="0" dur="${dur}s" fill="freeze"/>
+  </circle>
+  <!-- Center dot -->
+  <circle cx="${cx}" cy="${cy}" r="4" fill="${col}" opacity="${baseOpacity}">
+    <animate attributeName="r"       from="4" to="1"  dur="${shortDur}s" fill="freeze"/>
+    <animate attributeName="opacity" from="${baseOpacity}" to="0" dur="${shortDur}s" fill="freeze"/>
+  </circle>
+</svg>`;
+
+  const icon   = L.divIcon({ className: '', html: svg, iconSize: [sz, sz], iconAnchor: [cx, cy] });
+  const marker = L.marker([lat, lon], { icon, interactive: false, zIndexOffset: 850 });
+  marker.addTo(ltngState.layerGroup);
+  ltngState.markers.push({ marker, strikeTimeMs: strikeMs });
+
+  // Auto-remove after remaining visible time
+  setTimeout(() => {
+    ltngState.layerGroup.removeLayer(marker);
+    ltngState.markers = ltngState.markers.filter(m => m.marker !== marker);
+    updateLightningBadge();
+  }, remaining + 300);
+
+  // Trim excess markers
+  if (ltngState.markers.length > ltngState.maxMarkers) {
+    const excess = ltngState.markers.splice(0, ltngState.markers.length - ltngState.maxMarkers);
+    excess.forEach(m => ltngState.layerGroup.removeLayer(m.marker));
+  }
+
   updateLightningBadge();
 }
 
-function updateLightningBadge(){
-  const badge=document.getElementById('lightning-badge'); if(!badge) return;
-  if(!ltngState.enabled){badge.style.display='none';return;}
-  const rate=ltngState.recentTimes.filter(t=>Date.now()-t<60000).length;
-  badge.style.display=(rate>0||ltngState.markers.length>0)?'block':'none'; badge.textContent=`⚡ ${rate} strikes/min`;
+// ── Badge: shows strikes/min based on actual strike timestamps ─────────
+function updateLightningBadge() {
+  const badge = document.getElementById('lightning-badge');
+  if (!badge) return;
+  if (!ltngState.enabled) { badge.style.display = 'none'; return; }
+
+  const nowMs = Date.now();
+  const rate  = ltngState.recentTimes.filter(t => nowMs - t < 60000).length;
+  const active = ltngState.markers.length;
+
+  if (rate > 0 || active > 0) {
+    badge.style.display = 'block';
+    badge.textContent   = `⚡ ${rate}/min · ${active} visible`;
+  } else {
+    badge.style.display = 'none';
+  }
 }
 
-document.getElementById('t-lightning').addEventListener('change',function(){
-  ltngState.enabled=this.checked;
-  if(ltngState.enabled){ltngConnect();}else{ltngDisconnect();ltngState.markers.forEach(m=>ltngState.layerGroup.removeLayer(m.marker));ltngState.markers=[];ltngState.recentTimes=[];updateLightningBadge();}
+// ── Toggle handler ─────────────────────────────────────────────────────
+document.getElementById('t-lightning').addEventListener('change', function () {
+  ltngState.enabled = this.checked;
+  if (ltngState.enabled) {
+    ltngConnect();
+  } else {
+    ltngDisconnect();
+    ltngState.markers.forEach(m => ltngState.layerGroup.removeLayer(m.marker));
+    ltngState.markers     = [];
+    ltngState.recentTimes = [];
+    updateLightningBadge();
+  }
 });
 
-ltngConnect(); setInterval(updateLightningBadge,5000);
+// ── Boot ───────────────────────────────────────────────────────────────
+ltngConnect();
+// Refresh badge every 5 s so rate/visible counts stay current
+setInterval(updateLightningBadge, 5000);
+// Prune expired markers every 30 s (catches any that slipped past setTimeout)
+setInterval(() => {
+  const nowMs = Date.now();
+  ltngState.markers = ltngState.markers.filter(m => {
+    const age = nowMs - m.strikeTimeMs;
+    if (age > ltngState.fadeMs + 5000) {
+      ltngState.layerGroup.removeLayer(m.marker);
+      return false;
+    }
+    return true;
+  });
+  ltngState.recentTimes = ltngState.recentTimes.filter(t => nowMs - t < 60000);
+  updateLightningBadge();
+}, 30000);
 
 // =============================================
 //  WEATHER MODELS — NWS MAG Imagery + WMS Map Layers
