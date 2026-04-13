@@ -1,1 +1,0 @@
-id suggest that you download the git page if you want the .bat file to work just dont open the .html file in file explorer cause i want people to only use my website from the URL. also were trying to make changes to the python file so it can work. in the url if you want to get rid of the code on the top click on the map
