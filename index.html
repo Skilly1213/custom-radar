@@ -2856,7 +2856,8 @@ document.getElementById('btn-soundings').addEventListener('click', () => {
   // Close models if open
   document.getElementById('models-panel').style.display = 'none';
   document.getElementById('btn-models').classList.remove('active');
-  disableModelPicking();
+  stopMdlAnimation();
+  if (MDL.mapLayerOn) toggleMdlMapOverlay();
   if (!open) { showSoundingStationMarkers(); }
   else { hideSoundingStationMarkers(); }
 });
